@@ -49,6 +49,17 @@ packages:
   original:
     commit: c496038d44c328ae79fd7acd0b015bd7f9428294
     git: git@github.com:michalkonecny/branch-and-prune.git
+- completed:
+    name: simplex-method
+    pantry-tree:
+      sha256: 93e0214c8c4d820566261e2972d6e1b4d13ee70d78133907d4ee0a8cbc4b5160
+      size: 1359
+    sha256: 6b66ada9afb1ccf13bd084d3f4588a35bf314571faa98b64aaaae33696040d3e
+    size: 38778
+    url: https://github.com/rasheedja/simplex-method/archive/389ea32300b536b20b42b80c9ee23b156e736dc1.tar.gz
+    version: 0.2.0.0
+  original:
+    url: https://github.com/rasheedja/simplex-method/archive/389ea32300b536b20b42b80c9ee23b156e736dc1.tar.gz
 snapshots:
 - completed:
     sha256: 238fa745b64f91184f9aa518fe04bdde6552533d169b0da5256670df83a0f1a9

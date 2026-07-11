@@ -36,6 +36,7 @@ dependencies:
 - aern2-mp
 - aern2-affarith
 - branch-and-prune
+- simplex-method
 - hspec # VS Code plugin needs this (bug?)
 
 default-extensions:

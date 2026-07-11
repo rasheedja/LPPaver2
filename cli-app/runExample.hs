@@ -54,6 +54,18 @@ problems eps =
             constraint = (y <= exprLit 1.25) && (exprLit 1.25 <= x) && (y <= sin (10.0 * x))
           }
       ),
+      ( "xLtY",
+        Problem
+          { scope = mkBox [("x", (0.0, 2.0)), ("y", (0.0, 2.0))],
+            constraint = (x < y) `formImpl` (x <= y)
+          }
+      ),
+      ( "3xLtY",
+        Problem
+          { scope = mkBox [("x", (-2.0, 2.0)), ("y", (-2.0, 2.0))],
+            constraint = (3.0 * x < y)
+          }
+      ),
       ( "circleEps",
         Problem
           { scope = mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))],
@@ -133,7 +145,7 @@ processArgs [probS, epsS, giveUpAccuracyS, maxThreadsS, verboseS] =
 processArgs _ =
   error
     $ "Failed to match args.  Expected args: arithmetic problem eps giveUpAccuracy maxThreads verbose/silent"
-    ++ "\n Available arithmetics: IA, AA"
+    ++ "\n Available arithmetics: IA, AA, IA-simplex, AA-simplex"
     ++ "\n Available problems: "
     ++ List.concatMap ("\n" ++) problemNames
   where
@@ -153,6 +165,10 @@ main = do
       mainWithArgs sampleMPBall $ processArgs args
     "AA" ->
       mainWithArgs sampleMPAffine $ processArgs args
+    "IA-simplex" ->
+      mainWithArgsSimplex sampleMPBall $ processArgs args
+    "AA-simplex" ->
+      mainWithArgsSimplex sampleMPAffine $ processArgs args
     _ ->
       error $ "unknown arithmetic: " ++ arith
 
@@ -289,6 +305,28 @@ mainWithArgs sampleR (problem, giveUpAccuracy, maxThreads, isVerbose) = do
     task = do
       (Result paving _) <-
         lppBranchAndPrune sampleR
+          $ LPPBPParams
+            { maxThreads,
+              giveUpAccuracy = giveUpAccuracy,
+              problem,
+              shouldLog = isVerbose
+            }
+      liftIO $ putStrLn $ BP.showPavingSummary paving
+
+mainWithArgsSimplex ::
+  (CanEval r, HasKleeneanComparison r, A.ToJSON r, ConvertibleExactly r MP.MPBall) =>
+  r ->
+  (LPPProblem, Rational, Int, Bool) ->
+  IO ()
+mainWithArgsSimplex sampleR (problem, giveUpAccuracy, maxThreads, isVerbose) = do
+  ctrlState <- initControl
+  _ <- runStateT (runStdoutLoggingT task) ctrlState
+  pure ()
+  where
+    task :: (MonadLogger m, MonadIO m, MonadUnliftIOWithState m, MonadState LPPControlState m) => m ()
+    task = do
+      (Result paving _) <-
+        lppBranchAndPruneSimplex sampleR
           $ LPPBPParams
             { maxThreads,
               giveUpAccuracy = giveUpAccuracy,
