@@ -26,7 +26,7 @@ import Data.Map qualified as Map
 import GHC.Records
 import LPPaver2.LinearPrune (LinearPruneResult (..), linearPrune)
 import LPPaver2.RealConstraints
-import LPPaver2.SimplexPrune (simplexPrune)
+import LPPaver2.SimplexPrune (simplexPruneWithEvalBounds)
 import MixedTypesNumPrelude
 import Text.Printf (printf)
 -- import Debug.Trace (trace)
@@ -236,18 +236,12 @@ instance
         -- remove unused variables from the split order:
         simplifiedScope = boxRestrictSplitOrder (formVariables simplifiedForm) scope
         simplifiedFormProblem = BP.Problem {scope = simplifiedScope, constraint = simplifiedForm}
-        rToRationalBounds (r :: r) =
-          let ball = convertExactly r :: MP.MPBall
-              (lo, hi) = MP.endpoints ball
-           in (rational lo, rational hi)
-
     pavingP <- case getFormDecision simplifiedForm of
       CertainTrue -> pure $ BP.pavingInner scope (mkBoxes scope)
       CertainFalse -> pure $ BP.pavingOuter scope (mkBoxes scope)
       TrueOrFalse -> do
         -- try simplex pruning first
-        let rBounds = Map.map rToRationalBounds simplificationResult.evaluatedForm.exprValues
-        simplexResult <- simplexPrune simplifiedScope simplifiedForm rBounds
+        simplexResult <- simplexPruneWithEvalBounds simplifiedScope simplifiedForm simplificationResult.evaluatedForm.exprValues
         case simplexResult of
           Just linearPruneResult ->
             pure $ mkLinearPrunePaving scope simplifiedForm linearPruneResult

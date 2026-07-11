@@ -1,5 +1,6 @@
 module LPPaver2.SimplexPrune
   ( simplexPrune,
+    simplexPruneWithEvalBounds,
   )
 where
 
@@ -282,6 +283,32 @@ boxToVarDomains varToInt box =
           let hi = rational u
       ]
 
+type ExprBounds = Map.Map ExprHash (Rational, Rational)
+
+-- | Convert evaluated expression values into endpoint bounds used for
+-- nonlinear fallback terms. The arithmetic type decides how tight these
+-- bounds are: MPBall gives interval arithmetic bounds, while MPAffine gives
+-- affine-arithmetic bounds before conversion to endpoint intervals.
+exprValueBounds ::
+  (ConvertibleExactly r MP.MPBall) =>
+  Map.Map ExprHash r ->
+  ExprBounds
+exprValueBounds = Map.map valueBounds
+  where
+    valueBounds r =
+      let ball = convertExactly r :: MP.MPBall
+          (lo, hi) = MP.endpoints ball
+       in (rational lo, rational hi)
+
+simplexPruneWithEvalBounds ::
+  (MonadIO m, ConvertibleExactly r MP.MPBall) =>
+  Box ->
+  Form ->
+  Map.Map ExprHash r ->
+  m (Maybe LinearPruneResult)
+simplexPruneWithEvalBounds scope simplifiedForm exprValues =
+  simplexPrune scope simplifiedForm (exprValueBounds exprValues)
+
 -- | Use the simplex method to tighten a box given linear constraints.
 -- For each variable, maximize and minimize subject to all constraints.
 -- Returns a tighter box if any improvement is found.
@@ -289,7 +316,7 @@ simplexPrune ::
   (MonadIO m) =>
   Box ->
   Form ->
-  Map.Map ExprHash (Rational, Rational) ->
+  ExprBounds ->
   m (Maybe LinearPruneResult)
 simplexPrune scope simplifiedForm exprBounds = do
   let (varToInt, intToVar) = createVarMapping scope
