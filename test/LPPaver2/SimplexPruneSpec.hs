@@ -78,6 +78,22 @@ spec = describe "simplexPrune" $ do
     assertPrunedLowerBoundWithin aaBoundTolerance "y" 0.0 aaResult
     assertPrunedUpperBoundWithin aaBoundTolerance "y" 0.5 aaResult
 
+  it "detects contradictory linear constraints" $ do
+    let form = (x <= exprLit 0.0) && (exprLit 1.0 <= x)
+        box = mkBox [("x", (0.0, 1.0))]
+
+    result <- simplexPrune box form Map.empty
+
+    assertInfeasible result
+
+  it "detects constant-false conjuncts" $ do
+    let form = (x <= exprLit 0.0) && (exprLit 1.0 <= exprLit 0.0)
+        box = mkBox [("x", (0.0, 1.0))]
+
+    result <- simplexPrune box form Map.empty
+
+    assertInfeasible result
+
   it "uses interval fallback for unsupported nonlinear terms" $ do
     let sinX = sin x
         form = sinX + y <= exprLit 1.0
@@ -144,6 +160,15 @@ assertPrunedLowerBoundWithin tolerance var expectedLower result =
       expectationFailure "expected a pruned remaining box, got infeasible"
     Nothing ->
       expectationFailure "expected simplex pruning to tighten the box"
+
+assertInfeasible :: Maybe LinearPruneResult -> Expectation
+assertInfeasible result =
+  case result of
+    Just LinearPruneResult {maybeRemainingBox = Nothing, removedRegionTruth = False} -> pure ()
+    Just LinearPruneResult {maybeRemainingBox = Nothing, removedRegionTruth = True} ->
+      expectationFailure "expected infeasible constraint to remove an outer region"
+    Just LinearPruneResult {maybeRemainingBox = Just _} -> expectationFailure "expected infeasible pruning result"
+    Nothing -> expectationFailure "expected simplex pruning to detect infeasibility"
 
 assertNear :: Rational -> Rational -> Rational -> Expectation
 assertNear expected actual tolerance =

@@ -239,37 +239,67 @@ decomposeExpr exprNodes exprBounds = go
         Just (lo, hi) -> Just $ nonLinearTerm lo hi
         Nothing -> Nothing
 
+data BoundExtraction
+  = Infeasible
+  | Bounds [(Var, (Maybe Rational, Maybe Rational))]
+
 linearPruneCIE :: Box -> ExprBounds -> [Form] -> Maybe LinearPruneResult
 linearPruneCIE scope exprBounds ies
+  | any isInfeasible extractionResults =
+      Just
+        LinearPruneResult
+          { maybeRemainingBox = Nothing,
+            removedRegionTruth = False
+          }
   | isImprovement = Just result
   | otherwise = Nothing
   where
-    varBoundsFromInequalities = P.concatMap extractVarBound ies
+    extractionResults = P.map extractVarBound ies
+    varBoundsFromInequalities = P.concatMap boundsFromResult extractionResults
 
+    isInfeasible :: BoundExtraction -> Bool
+    isInfeasible Infeasible = True
+    isInfeasible _ = False
+
+    boundsFromResult :: BoundExtraction -> [(Var, (Maybe Rational, Maybe Rational))]
+    boundsFromResult (Bounds bounds) = bounds
+    boundsFromResult Infeasible = []
+
+    extractVarBound :: Form -> BoundExtraction
     extractVarBound form =
       case lookupFormNode form form.root of
         FormComp {comp, e1, e2} ->
           case comp of
             CompLe -> boundsFromLessOrEqual form.nodesE e1 e2
             CompLeq -> boundsFromLessOrEqual form.nodesE e1 e2
-            CompEq -> boundsFromLessOrEqual form.nodesE e1 e2 P.++ boundsFromLessOrEqual form.nodesE e2 e1
-            CompNeq -> []
-        _ -> [] -- not a comparison, shouldn't happen since we only call this on IEs
+            CompEq -> mergeExtractions (boundsFromLessOrEqual form.nodesE e1 e2) (boundsFromLessOrEqual form.nodesE e2 e1)
+            CompNeq -> Bounds []
+        _ -> Bounds [] -- not a comparison, shouldn't happen since we only call this on IEs
 
+    boundsFromLessOrEqual :: ExprStore -> ExprHash -> ExprHash -> BoundExtraction
     boundsFromLessOrEqual exprNodes e1 e2 =
       case (decomposeExpr exprNodes exprBounds e1, decomposeExpr exprNodes exprBounds e2) of
         (Just d1, Just d2) -> boundsFromDiff (subDecomps d1 d2)
-        _ -> []
+        _ -> Bounds []
 
+    mergeExtractions :: BoundExtraction -> BoundExtraction -> BoundExtraction
+    mergeExtractions Infeasible _ = Infeasible
+    mergeExtractions _ Infeasible = Infeasible
+    mergeExtractions (Bounds b1) (Bounds b2) = Bounds (b1 P.++ b2)
+
+    boundsFromDiff :: Decomposition -> BoundExtraction
     boundsFromDiff diff =
       case activeVars of
+        []
+          | diff.constant P.+ diff.nlLower P.> rational 0 -> Infeasible
+          | otherwise -> Bounds []
         [(var, coeff)]
-          | coeff > 0 -> [(var, (Nothing, Just bound))]
-          | coeff < 0 -> [(var, (Just bound, Nothing))]
-          | otherwise -> []
+          | coeff > 0 -> Bounds [(var, (Nothing, Just bound))]
+          | coeff < 0 -> Bounds [(var, (Just bound, Nothing))]
+          | otherwise -> Bounds []
           where
             bound = (P.negate diff.constant P.- diff.nlLower) P./ coeff
-        _ -> []
+        _ -> Bounds []
       where
         activeVars = [(var, coeff) | (var, coeff) <- Map.toList diff.coefficients, coeff /= 0]
 

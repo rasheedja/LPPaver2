@@ -168,12 +168,16 @@ createVarMapping box =
       intToVar = Map.fromList (P.zip (P.map int [1 ..]) vars)
    in (varToInt, intToVar)
 
+data ConstraintExtraction
+  = Infeasible
+  | Constraints [ST.PolyConstraint]
+
 -- | Convert a linear decomposition constraint (lhs ≤ rhs) to a simplex PolyConstraint.
 decompToSimplexConstraint ::
   Map.Map Var Int ->
   Decomposition ->
   Decomposition ->
-  Maybe ST.PolyConstraint
+  ConstraintExtraction
 decompToSimplexConstraint varToInt d1 d2 =
   let diff = subDecomps d1 d2
       -- Extract variables that actually have an impact (non-zero coefficient)
@@ -182,8 +186,13 @@ decompToSimplexConstraint varToInt d1 d2 =
       -- Check if any active variable is missing from our simplex mapping
       hasUnknownVars = P.any (\(var, _) -> not (Map.member var varToInt)) activeVars
 
-   in if hasUnknownVars || P.null activeVars
-        then Nothing -- Safely discard the constraint; we can't bound the unknown variables
+   in if P.null activeVars
+        then
+          if diff.constant P.+ diff.nlLower P.> rational 0
+            then Infeasible
+            else Constraints []
+        else if hasUnknownVars
+        then Constraints [] -- Safely discard the constraint; we can't bound the unknown variables
         else
           let lhsMap =
                 Map.fromList
@@ -200,10 +209,10 @@ decompToSimplexConstraint varToInt d1 d2 =
               -- → diff.linear ≤ -diff.nlLower (safe relaxation since -diff.nl ≤ -diff.nlLower)
               rhsCorrect = P.negate diff.nlLower P.- diff.constant -- TODO: looks fishy
            in if Map.null lhsMap
-                then Nothing
-                else Just $ ST.LEQ {lhs = lhsMap, rhs = rhsCorrect}
+                then Constraints []
+                else Constraints [ST.LEQ {lhs = lhsMap, rhs = rhsCorrect}]
 
--- -- | Convert a linear decomposition constraint (lhs ≤ rhs) to a simplex PolyConstraint.
+-- | Convert a linear decomposition constraint (lhs ≤ rhs) to a simplex PolyConstraint.
 -- -- Given: d1 comp d2 where comp is ≤ or <
 -- -- We produce: (coeffs1 - coeffs2) · x ≤ (const2 - const1) + (nlUpper2 - nlLower1)
 -- decompToSimplexConstraint ::
@@ -241,13 +250,13 @@ extractSimplexConstraints ::
   Map.Map ExprHash (Rational, Rational) ->
   Map.Map Var Int ->
   Form ->
-  [ST.PolyConstraint]
+  ConstraintExtraction
 extractSimplexConstraints exprNodes exprBounds varToInt form0 =
   extractFromRoot form0.root
   where
     decompose = decomposeExpr exprNodes exprBounds
 
-    extractFromRoot :: FormHash -> [ST.PolyConstraint]
+    extractFromRoot :: FormHash -> ConstraintExtraction
     extractFromRoot fH =
       case lookupFormNode form0 fH of
         FormComp {comp, e1, e2} ->
@@ -256,19 +265,21 @@ extractSimplexConstraints exprNodes exprBounds varToInt form0 =
             CompLeq -> constraintFromLE e1 e2
             CompEq ->
               -- a == b → a ≤ b ∧ b ≤ a
-              constraintFromLE e1 e2 P.++ constraintFromLE e2 e1
-            CompNeq -> [] -- can't express as LP constraint
+              mergeConstraints (constraintFromLE e1 e2) (constraintFromLE e2 e1)
+            CompNeq -> Constraints [] -- can't express as LP constraint
         FormBinary {bconn = ConnAnd, f1, f2} ->
-          extractFromRoot f1 P.++ extractFromRoot f2
-        _ -> []
+          mergeConstraints (extractFromRoot f1) (extractFromRoot f2)
+        _ -> Constraints []
 
-    constraintFromLE :: ExprHash -> ExprHash -> [ST.PolyConstraint]
+    mergeConstraints Infeasible _ = Infeasible
+    mergeConstraints _ Infeasible = Infeasible
+    mergeConstraints (Constraints c1) (Constraints c2) = Constraints (c1 P.++ c2)
+
+    constraintFromLE :: ExprHash -> ExprHash -> ConstraintExtraction
     constraintFromLE e1H e2H =
       let d1 = decompose e1H
           d2 = decompose e2H
-       in case decompToSimplexConstraint varToInt d1 d2 of
-            Just c -> [c]
-            Nothing -> []
+       in decompToSimplexConstraint varToInt d1 d2
 
 -- | Create simplex variable domain constraints from box bounds.
 boxToVarDomains :: Map.Map Var Int -> Box -> ST.VarDomainMap
@@ -320,44 +331,47 @@ simplexPrune ::
   m (Maybe LinearPruneResult)
 simplexPrune scope simplifiedForm exprBounds = do
   let (varToInt, intToVar) = createVarMapping scope
-  let constraints = extractSimplexConstraints simplifiedForm.nodesE exprBounds varToInt simplifiedForm
+  let constraintExtraction = extractSimplexConstraints simplifiedForm.nodesE exprBounds varToInt simplifiedForm
   let varDomains = boxToVarDomains varToInt scope
+  case constraintExtraction of
+    Infeasible ->
+      pure $ Just LinearPruneResult {maybeRemainingBox = Nothing, removedRegionTruth = False}
+    Constraints constraints ->
+      -- If we extracted no linear constraints beyond box bounds, simplex won't help
+      if P.null constraints
+        then pure Nothing
+        else do
+          -- For each variable, minimize and maximize
+          let vars = Map.toList varToInt
+          let objectives =
+                P.concatMap
+                  (\(_, intVar) ->
+                    [ ST.Min {objective = Map.singleton intVar (rational 1)},
+                      ST.Max {objective = Map.singleton intVar (rational 1)}
+                    ]
+                  )
+                  vars
 
-  -- If we extracted no linear constraints beyond box bounds, simplex won't help
-  if P.null constraints
-    then pure Nothing
-    else do
-      -- For each variable, minimize and maximize
-      let vars = Map.toList varToInt
-      let objectives =
-            P.concatMap
-              (\(_, intVar) ->
-                [ ST.Min {objective = Map.singleton intVar (rational 1)},
-                  ST.Max {objective = Map.singleton intVar (rational 1)}
-                ]
-              )
-              vars
+          result <- runNoLoggingT $ Simplex.twoPhaseSimplex varDomains objectives constraints
 
-      result <- runNoLoggingT $ Simplex.twoPhaseSimplex varDomains objectives constraints
-
-      case result.feasibleSystem of
-        Nothing ->
-          -- Infeasible means the constraint conjunction is unsatisfiable on this box
-          pure $
-            Just
-              LinearPruneResult
-                { maybeRemainingBox = Nothing,
-                  removedRegionTruth = False -- the constraint is false on the entire box
-                }
-        Just _ -> do
-          -- Extract tightened bounds from objective results
-          -- FIXME: does it do anything with the objective var
-          let objResults = result.objectiveResults
-          let newBounds = extractBoundsFromResults intToVar objResults
-          let tightenedBox = applyNewBounds scope newBounds
-          case tightenedBox of
-            Just box -> pure $ Just LinearPruneResult {maybeRemainingBox = Just box, removedRegionTruth = False}
-            Nothing -> pure Nothing
+          case result.feasibleSystem of
+            Nothing ->
+              -- Infeasible means the constraint conjunction is unsatisfiable on this box
+              pure $
+                Just
+                  LinearPruneResult
+                    { maybeRemainingBox = Nothing,
+                      removedRegionTruth = False -- the constraint is false on the entire box
+                    }
+            Just _ -> do
+              -- Extract tightened bounds from objective results
+              -- FIXME: does it do anything with the objective var
+              let objResults = result.objectiveResults
+              let newBounds = extractBoundsFromResults intToVar objResults
+              let tightenedBox = applyNewBounds scope newBounds
+              case tightenedBox of
+                Just box -> pure $ Just LinearPruneResult {maybeRemainingBox = Just box, removedRegionTruth = False}
+                Nothing -> pure Nothing
 
 -- | Extract min/max bounds for each variable from simplex objective results.
 -- Objectives are in pairs: [Min x1, Max x1, Min x2, Max x2, ...]
