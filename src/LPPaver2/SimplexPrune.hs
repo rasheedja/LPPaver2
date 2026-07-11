@@ -15,7 +15,7 @@ import LPPaver2.RealConstraints.Expr
     ( BinaryOp(OpTimes, OpPlus, OpMinus, OpDivide),
       ExprF(ExprVar, ExprUnary, ExprBinary, ExprLit, lit, var, unop,
             binop, e1, e2),
-      ExprHash,
+      ExprHash(ExprHash),
       ExprStore,
       UnaryOp(OpNeg, OpSin, OpSqrt, OpCos),
       Var )
@@ -50,6 +50,15 @@ data Decomposition = Decomposition -- TODO: why do we need this?
     nlLower :: Rational, -- check how the non-linear remainder is being used
     nlUpper :: Rational
   }
+
+data DecomposeFailure
+  = MissingExprNode ExprHash
+  | MissingNonlinearBound ExprHash
+  deriving (P.Eq)
+
+instance P.Show DecomposeFailure where
+  show (MissingExprNode (ExprHash h)) = "MissingExprNode " P.++ P.show h
+  show (MissingNonlinearBound (ExprHash h)) = "MissingNonlinearBound " P.++ P.show h
 
 emptyDecomp :: Decomposition
 emptyDecomp =
@@ -112,52 +121,69 @@ scaleDecomp c d
           nlUpper = d.nlLower P.* c
         }
 
--- | Check if a decomposition has any linear variable terms.
-hasLinearTerms :: Decomposition -> Bool
-hasLinearTerms d = not (Map.null d.coefficients)
-
 -- | Decompose an expression into linear part + non-linear remainder.
 -- Uses the expression DAG and interval evaluations for non-linear sub-expressions.
 decomposeExpr ::
   ExprStore ->
   Map.Map ExprHash (Rational, Rational) ->
   ExprHash ->
-  Decomposition
+  Either DecomposeFailure Decomposition
 decomposeExpr exprNodes exprBounds = go
   where
-    go :: ExprHash -> Decomposition
+    go :: ExprHash -> Either DecomposeFailure Decomposition
     go eH =
       case Map.lookup eH exprNodes of
-        Nothing -> fallback eH
+        Nothing -> missingNodeFallback eH
         Just node -> case node of
-          ExprVar {var} -> linearVar var
-          ExprLit {lit} -> linearConst lit
+          ExprVar {var} -> Right $ linearVar var
+          ExprLit {lit} -> Right $ linearConst lit
           ExprUnary {unop = OpNeg, e1} ->
-            negateDecomp (go e1)
+            case go e1 of
+              Right d -> Right $ negateDecomp d
+              Left failure -> Left failure
           ExprBinary {binop = OpPlus, e1, e2} ->
-            addDecomps (go e1) (go e2)
+            case (go e1, go e2) of
+              (Right d1, Right d2) -> Right $ addDecomps d1 d2
+              (Left failure, _) -> Left failure
+              (_, Left failure) -> Left failure
           ExprBinary {binop = OpMinus, e1, e2} ->
-            subDecomps (go e1) (go e2)
+            case (go e1, go e2) of
+              (Right d1, Right d2) -> Right $ subDecomps d1 d2
+              (Left failure, _) -> Left failure
+              (_, Left failure) -> Left failure
           ExprBinary {binop = OpTimes, e1, e2} ->
             case (Map.lookup e1 exprNodes, Map.lookup e2 exprNodes) of
-              (Just (ExprLit {lit}), _) -> scaleDecomp lit (go e2)
-              (_, Just (ExprLit {lit})) -> scaleDecomp lit (go e1)
-              _otherwise -> fallback eH
+              (Just (ExprLit {lit}), _) ->
+                case go e2 of
+                  Right d -> Right $ scaleDecomp lit d
+                  Left failure -> Left failure
+              (_, Just (ExprLit {lit})) ->
+                case go e1 of
+                  Right d -> Right $ scaleDecomp lit d
+                  Left failure -> Left failure
+              _otherwise -> nonlinearFallback eH
           ExprBinary {binop = OpDivide, e1, e2} ->
             case Map.lookup e2 exprNodes of
-              Just (ExprLit {lit}) | lit /= 0 -> scaleDecomp (P.recip lit) (go e1)
-              _otherwise -> fallback eH
-          ExprUnary {unop = OpSin} -> fallback eH
-          ExprUnary {unop = OpCos} -> fallback eH
-          ExprUnary {unop = OpSqrt} -> fallback eH
+              Just (ExprLit {lit}) | lit /= 0 ->
+                case go e1 of
+                  Right d -> Right $ scaleDecomp (P.recip lit) d
+                  Left failure -> Left failure
+              _otherwise -> nonlinearFallback eH
+          ExprUnary {unop = OpSin} -> nonlinearFallback eH
+          ExprUnary {unop = OpCos} -> nonlinearFallback eH
+          ExprUnary {unop = OpSqrt} -> nonlinearFallback eH
 
-    -- TODO: better name, it gets bounds for nl expr
-    fallback :: ExprHash -> Decomposition
-    fallback eH =
+    missingNodeFallback :: ExprHash -> Either DecomposeFailure Decomposition
+    missingNodeFallback eH =
       case Map.lookup eH exprBounds of
-        Just (lo, hi) -> nonLinearTerm lo hi
-        Nothing -> error "shouldn't be here!"
-          -- emptyDecomp -- shouldn't happen if evaluation is complete TODO: error out!
+        Just (lo, hi) -> Right $ nonLinearTerm lo hi
+        Nothing -> Left $ MissingExprNode eH
+
+    nonlinearFallback :: ExprHash -> Either DecomposeFailure Decomposition
+    nonlinearFallback eH =
+      case Map.lookup eH exprBounds of
+        Just (lo, hi) -> Right $ nonLinearTerm lo hi
+        Nothing -> Left $ MissingNonlinearBound eH
 
 -- | Create a mapping from LPPaver2 variable names (String) to simplex variable IDs (Int).
 createVarMapping :: Box -> (Map.Map Var Int, Map.Map Int Var)
@@ -200,7 +226,6 @@ decompToSimplexConstraint varToInt d1 d2 =
                      (var, coeff) <- Map.toList diff.coefficients,
                      coeff /= 0,
                      Just intVar <- [Map.lookup var varToInt]]
-              rhs = P.negate diff.constant P.+ (diff.nlUpper P.- diff.nlLower)
               -- The constraint is: linear_part + nl_part ≤ 0
               -- → linear_part ≤ -nl_lower (since nl_part ≥ nl_lower)
               -- Actually: diff = d1 - d2, we want d1 ≤ d2
@@ -211,38 +236,6 @@ decompToSimplexConstraint varToInt d1 d2 =
            in if Map.null lhsMap
                 then Constraints []
                 else Constraints [ST.LEQ {lhs = lhsMap, rhs = rhsCorrect}]
-
--- | Convert a linear decomposition constraint (lhs ≤ rhs) to a simplex PolyConstraint.
--- -- Given: d1 comp d2 where comp is ≤ or <
--- -- We produce: (coeffs1 - coeffs2) · x ≤ (const2 - const1) + (nlUpper2 - nlLower1)
--- decompToSimplexConstraint ::
---   Map.Map Var Int ->
---   Decomposition ->
---   Decomposition ->
---   P.Maybe ST.PolyConstraint
--- decompToSimplexConstraint varToInt d1 d2 =
---   let diff = subDecomps d1 d2
---    in if not (hasLinearTerms diff)
---         then Nothing -- no linear terms to constrain -- TODO: is it safe to drop things?
---         else
---           let lhsMap =
---                 Map.fromList
---                   [ (intVar, coeff)
---                     | (var, coeff) <- Map.toList diff.coefficients,
---                       Just intVar <- [Map.lookup var varToInt],
---                       coeff P./= rat 0
---                   ]
---               rhs = P.negate diff.constant P.+ (diff.nlUpper P.- diff.nlLower)
---               -- The constraint is: linear_part + nl_part ≤ 0
---               -- → linear_part ≤ -nl_lower (since nl_part ≥ nl_lower)
---               -- Actually: diff = d1 - d2, we want d1 ≤ d2
---               -- → diff.linear + diff.nl ≤ 0
---               -- → diff.linear ≤ -diff.nl
---               -- → diff.linear ≤ -diff.nlLower (safe relaxation since -diff.nl ≤ -diff.nlLower)
---               rhsCorrect = P.negate diff.nlLower P.- diff.constant -- TODO: looks fishy
---            in if Map.null lhsMap
---                 then Nothing
---                 else Just $ ST.LEQ {lhs = lhsMap, rhs = rhsCorrect}
 
 -- | Extract simplex constraints from a conjunction of inequalities.
 extractSimplexConstraints ::
@@ -277,9 +270,9 @@ extractSimplexConstraints exprNodes exprBounds varToInt form0 =
 
     constraintFromLE :: ExprHash -> ExprHash -> ConstraintExtraction
     constraintFromLE e1H e2H =
-      let d1 = decompose e1H
-          d2 = decompose e2H
-       in decompToSimplexConstraint varToInt d1 d2
+      case (decompose e1H, decompose e2H) of
+        (Right d1, Right d2) -> decompToSimplexConstraint varToInt d1 d2
+        _ -> Constraints []
 
 -- | Create simplex variable domain constraints from box bounds.
 boxToVarDomains :: Map.Map Var Int -> Box -> ST.VarDomainMap

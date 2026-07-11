@@ -94,6 +94,14 @@ spec = describe "simplexPrune" $ do
 
     assertInfeasible result
 
+  it "skips unsupported nonlinear terms without fallback bounds" $ do
+    let form = sin x + y <= exprLit 1.0
+        box = mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))]
+
+    result <- simplexPrune box form Map.empty
+
+    expectNoPruning result
+
   it "uses interval fallback for unsupported nonlinear terms" $ do
     let sinX = sin x
         form = sinX + y <= exprLit 1.0
