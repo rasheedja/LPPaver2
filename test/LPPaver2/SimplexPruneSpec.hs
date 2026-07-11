@@ -25,6 +25,23 @@ spec = describe "simplexPrune" $ do
 
     assertPrunedUpperBound "x" 2.0 =<< simplexPrune box form Map.empty
 
+  it "decomposes division by a positive literal exactly" $ do
+    let form = x / exprLit 2.0 + y <= exprLit 1.0
+        box = mkBox [("x", (0.0, 4.0)), ("y", (0.0, 4.0))]
+
+    result <- simplexPrune box form Map.empty
+
+    assertPrunedUpperBound "x" 2.0 result
+    assertPrunedUpperBound "y" 1.0 result
+
+  it "decomposes division by a negative literal exactly" $ do
+    let form = x / exprLit (-2.0) + y <= exprLit (-1.0)
+        box = mkBox [("x", (0.0, 4.0)), ("y", (0.0, 4.0))]
+
+    result <- simplexPrune box form Map.empty
+
+    assertPrunedLowerBound "x" 2.0 result
+
   it "uses interval fallback for unsupported nonlinear terms" $ do
     let sinX = sin x
         form = sinX + y <= exprLit 1.0
@@ -48,9 +65,27 @@ assertPrunedUpperBound var expectedUpper result =
         Just domain -> do
           let (_lo, hi) = MP.endpoints domain
               tolerance = 1e-20 :: Rational
-              actualUpper = rational hi
-          P.abs (actualUpper - expectedUpper) `shouldSatisfy` (\delta -> delta P.<= tolerance)
+          assertNear expectedUpper (rational hi) tolerance
     Just LinearPruneResult {maybeRemainingBox = Nothing} ->
       expectationFailure "expected a pruned remaining box, got infeasible"
     Nothing ->
       expectationFailure "expected simplex pruning to tighten the box"
+
+assertPrunedLowerBound :: String -> Rational -> Maybe LinearPruneResult -> Expectation
+assertPrunedLowerBound var expectedLower result =
+  case result of
+    Just LinearPruneResult {maybeRemainingBox = Just remainingBox} ->
+      case Map.lookup var remainingBox.box_.varDomains of
+        Nothing -> expectationFailure $ "missing variable " <> var <> " in remaining box"
+        Just domain -> do
+          let (lo, _hi) = MP.endpoints domain
+              tolerance = 1e-20 :: Rational
+          assertNear expectedLower (rational lo) tolerance
+    Just LinearPruneResult {maybeRemainingBox = Nothing} ->
+      expectationFailure "expected a pruned remaining box, got infeasible"
+    Nothing ->
+      expectationFailure "expected simplex pruning to tighten the box"
+
+assertNear :: Rational -> Rational -> Rational -> Expectation
+assertNear expected actual tolerance =
+  P.abs (actual - expected) `shouldSatisfy` (\delta -> delta P.<= tolerance)

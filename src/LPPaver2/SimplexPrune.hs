@@ -142,7 +142,10 @@ decomposeExpr exprNodes exprBounds = go
               (Just (ExprLit {lit}), _) -> scaleDecomp lit (go e2)
               (_, Just (ExprLit {lit})) -> scaleDecomp lit (go e1)
               _otherwise -> fallback eH
-          ExprBinary {binop = OpDivide} -> fallback eH
+          ExprBinary {binop = OpDivide, e1, e2} ->
+            case Map.lookup e2 exprNodes of
+              Just (ExprLit {lit}) | lit /= 0 -> scaleDecomp (P.recip lit) (go e1)
+              _otherwise -> fallback eH
           ExprUnary {unop = OpSin} -> fallback eH
           ExprUnary {unop = OpCos} -> fallback eH
           ExprUnary {unop = OpSqrt} -> fallback eH
