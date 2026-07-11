@@ -35,6 +35,7 @@ library
       LPPaver2.RealConstraints.EvalArithmetic.MPBall
       LPPaver2.RealConstraints.Expr
       LPPaver2.RealConstraints.Form
+      LPPaver2.SimplexPrune
   other-modules:
       Paths_LPPaver2
   autogen-modules:
@@ -63,6 +64,7 @@ library
     , mixed-types-num
     , monad-logger
     , mtl
+    , simplex-method
     , text
     , time
     , transformers
@@ -100,6 +102,7 @@ executable lppaver2-example
     , mixed-types-num
     , monad-logger
     , mtl
+    , simplex-method
     , text
     , time
     , transformers
@@ -112,6 +115,7 @@ test-suite LPPaver2-test
   other-modules:
       LPPaver2.LinearPruneSpec
       LPPaver2.RealConstraints.EvalSpec
+      LPPaver2.SimplexPruneSpec
       Paths_LPPaver2
   autogen-modules:
       Paths_LPPaver2
@@ -140,6 +144,7 @@ test-suite LPPaver2-test
     , mixed-types-num
     , monad-logger
     , mtl
+    , simplex-method
     , text
     , time
     , transformers

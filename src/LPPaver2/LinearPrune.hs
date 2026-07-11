@@ -2,6 +2,7 @@ module LPPaver2.LinearPrune
   ( extractCIEorDIE,
     IEFormType (..),
     linearPrune,
+    linearPruneWithEvalBounds,
     LinearPruneResult (..),
   )
 where
@@ -10,13 +11,11 @@ import AERN2.MP (HasPrecision (..), mpBallP)
 import AERN2.MP qualified as MP
 import BranchAndPrune.BranchAndPrune qualified as BP
 import Data.Map qualified as Map
-import Debug.Trace (trace)
 import GHC.Records
-import LPPaver2.RealConstraints (ExprF (..))
+import LPPaver2.RealConstraints (BinaryOp (..), ExprF (..), ExprHash, ExprStore, UnaryOp (..), Var)
 import LPPaver2.RealConstraints.Boxes
 import LPPaver2.RealConstraints.Form
 import MixedTypesNumPrelude
-import Text.Printf (printf)
 import Prelude qualified as P
 
 -- |
@@ -89,11 +88,35 @@ data LinearPruneResult = LinearPruneResult
   }
 
 linearPrune :: BP.Problem Form Box -> Maybe LinearPruneResult
-linearPrune BP.Problem {scope, constraint} =
+linearPrune problem = linearPruneWithBounds problem Map.empty
+
+linearPruneWithEvalBounds ::
+  (ConvertibleExactly r MP.MPBall) =>
+  BP.Problem Form Box ->
+  Map.Map ExprHash r ->
+  Maybe LinearPruneResult
+linearPruneWithEvalBounds problem exprValues =
+  linearPruneWithBounds problem (exprValueBounds exprValues)
+
+type ExprBounds = Map.Map ExprHash (Rational, Rational)
+
+exprValueBounds ::
+  (ConvertibleExactly r MP.MPBall) =>
+  Map.Map ExprHash r ->
+  ExprBounds
+exprValueBounds = Map.map valueBounds
+  where
+    valueBounds r =
+      let ball = convertExactly r :: MP.MPBall
+          (lo, hi) = MP.endpoints ball
+       in (rational lo, rational hi)
+
+linearPruneWithBounds :: BP.Problem Form Box -> ExprBounds -> Maybe LinearPruneResult
+linearPruneWithBounds BP.Problem {scope, constraint} exprBounds =
   let maybeIEInfo = extractCIEorDIE constraint
    in case maybeIEInfo of
-        Just (cieForm, CIE) -> linearPruneCIE scope (extractIEsFromCIE cieForm)
-        Just (ieForm, IE) -> linearPruneCIE scope [ieForm] -- TODO: try both CIE and DIE and use the better result
+        Just (cieForm, CIE) -> linearPruneCIE scope exprBounds (extractIEsFromCIE cieForm)
+        Just (ieForm, IE) -> linearPruneCIE scope exprBounds [ieForm] -- TODO: try both CIE and DIE and use the better result
         -- TODO: implement linear pruning for disjunctions of inequalities
         _ -> Nothing -- not a form suitable for linear pruning
 
@@ -106,68 +129,205 @@ extractIEsFromCIE form0 = aux form0.root
         FormBinary {bconn = ConnAnd, f1, f2} -> aux f1 ++ aux f2
         _ -> error "extractIEsFromCIE: not a CIE form"
 
-linearPruneCIE :: Box -> [Form] -> Maybe LinearPruneResult
-linearPruneCIE scope ies
+data Decomposition = Decomposition
+  { coefficients :: Map.Map Var Rational,
+    constant :: Rational,
+    nlLower :: Rational,
+    nlUpper :: Rational
+  }
+
+emptyDecomp :: Decomposition
+emptyDecomp =
+  Decomposition
+    { coefficients = Map.empty,
+      constant = rational 0,
+      nlLower = rational 0,
+      nlUpper = rational 0
+    }
+
+linearVar :: Var -> Decomposition
+linearVar var = emptyDecomp {coefficients = Map.singleton var (rational 1)}
+
+linearConst :: Rational -> Decomposition
+linearConst value = emptyDecomp {constant = value}
+
+nonLinearTerm :: Rational -> Rational -> Decomposition
+nonLinearTerm lo hi = emptyDecomp {nlLower = lo, nlUpper = hi}
+
+negateDecomp :: Decomposition -> Decomposition
+negateDecomp d =
+  Decomposition
+    { coefficients = Map.map P.negate d.coefficients,
+      constant = P.negate d.constant,
+      nlLower = P.negate d.nlUpper,
+      nlUpper = P.negate d.nlLower
+    }
+
+addDecomps :: Decomposition -> Decomposition -> Decomposition
+addDecomps d1 d2 =
+  Decomposition
+    { coefficients = Map.unionWith (P.+) d1.coefficients d2.coefficients,
+      constant = d1.constant P.+ d2.constant,
+      nlLower = d1.nlLower P.+ d2.nlLower,
+      nlUpper = d1.nlUpper P.+ d2.nlUpper
+    }
+
+subDecomps :: Decomposition -> Decomposition -> Decomposition
+subDecomps d1 d2 = addDecomps d1 (negateDecomp d2)
+
+scaleDecomp :: Rational -> Decomposition -> Decomposition
+scaleDecomp scale d
+  | scale >= 0 =
+      Decomposition
+        { coefficients = Map.map (P.* scale) d.coefficients,
+          constant = d.constant P.* scale,
+          nlLower = d.nlLower P.* scale,
+          nlUpper = d.nlUpper P.* scale
+        }
+  | otherwise =
+      Decomposition
+        { coefficients = Map.map (P.* scale) d.coefficients,
+          constant = d.constant P.* scale,
+          nlLower = d.nlUpper P.* scale,
+          nlUpper = d.nlLower P.* scale
+        }
+
+decomposeExpr :: ExprStore -> ExprBounds -> ExprHash -> Maybe Decomposition
+decomposeExpr exprNodes exprBounds = go
+  where
+    go eH =
+      case Map.lookup eH exprNodes of
+        Nothing -> fallback eH
+        Just node ->
+          case node of
+            ExprVar {var} -> Just $ linearVar var
+            ExprLit {lit} -> Just $ linearConst lit
+            ExprUnary {unop = OpNeg, e1} ->
+              case go e1 of
+                Just d -> Just $ negateDecomp d
+                Nothing -> Nothing
+            ExprUnary {} -> fallback eH
+            ExprBinary {binop = OpPlus, e1, e2} ->
+              case (go e1, go e2) of
+                (Just d1, Just d2) -> Just $ addDecomps d1 d2
+                _ -> Nothing
+            ExprBinary {binop = OpMinus, e1, e2} ->
+              case (go e1, go e2) of
+                (Just d1, Just d2) -> Just $ subDecomps d1 d2
+                _ -> Nothing
+            ExprBinary {binop = OpTimes, e1, e2} ->
+              case (Map.lookup e1 exprNodes, Map.lookup e2 exprNodes) of
+                (Just (ExprLit {lit}), _) ->
+                  case go e2 of
+                    Just d -> Just $ scaleDecomp lit d
+                    Nothing -> Nothing
+                (_, Just (ExprLit {lit})) ->
+                  case go e1 of
+                    Just d -> Just $ scaleDecomp lit d
+                    Nothing -> Nothing
+                _ -> fallback eH
+            ExprBinary {binop = OpDivide, e1, e2} ->
+              case Map.lookup e2 exprNodes of
+                Just (ExprLit {lit}) | lit /= 0 ->
+                  case go e1 of
+                    Just d -> Just $ scaleDecomp (P.recip lit) d
+                    Nothing -> Nothing
+                _ -> fallback eH
+
+    fallback eH =
+      case Map.lookup eH exprBounds of
+        Just (lo, hi) -> Just $ nonLinearTerm lo hi
+        Nothing -> Nothing
+
+data BoundExtraction
+  = Infeasible
+  | Bounds [(Var, (Maybe Rational, Maybe Rational))]
+
+linearPruneCIE :: Box -> ExprBounds -> [Form] -> Maybe LinearPruneResult
+linearPruneCIE scope exprBounds ies
+  | any isInfeasible extractionResults =
+      Just
+        LinearPruneResult
+          { maybeRemainingBox = Nothing,
+            removedRegionTruth = False
+          }
   | isImprovement = Just result
   | otherwise = Nothing
   where
-    varBoundsFromInequalities = P.concatMap extractVarBound ies
+    extractionResults = P.map extractVarBound ies
+    varBoundsFromInequalities = P.concatMap boundsFromResult extractionResults
+
+    isInfeasible :: BoundExtraction -> Bool
+    isInfeasible Infeasible = True
+    isInfeasible _ = False
+
+    boundsFromResult :: BoundExtraction -> [(Var, (Maybe Rational, Maybe Rational))]
+    boundsFromResult (Bounds bounds) = bounds
+    boundsFromResult Infeasible = []
+
+    extractVarBound :: Form -> BoundExtraction
+    extractVarBound form =
+      case lookupFormNode form form.root of
+        FormComp {comp, e1, e2} ->
+          case comp of
+            CompLe -> boundsFromLessOrEqual form.nodesE e1 e2
+            CompLeq -> boundsFromLessOrEqual form.nodesE e1 e2
+            CompEq -> mergeExtractions (boundsFromLessOrEqual form.nodesE e1 e2) (boundsFromLessOrEqual form.nodesE e2 e1)
+            CompNeq -> Bounds []
+        _ -> Bounds [] -- not a comparison, shouldn't happen since we only call this on IEs
+
+    boundsFromLessOrEqual :: ExprStore -> ExprHash -> ExprHash -> BoundExtraction
+    boundsFromLessOrEqual exprNodes e1 e2 =
+      case (decomposeExpr exprNodes exprBounds e1, decomposeExpr exprNodes exprBounds e2) of
+        (Just d1, Just d2) -> boundsFromDiff (subDecomps d1 d2)
+        _ -> Bounds []
+
+    mergeExtractions :: BoundExtraction -> BoundExtraction -> BoundExtraction
+    mergeExtractions Infeasible _ = Infeasible
+    mergeExtractions _ Infeasible = Infeasible
+    mergeExtractions (Bounds b1) (Bounds b2) = Bounds (b1 P.++ b2)
+
+    boundsFromDiff :: Decomposition -> BoundExtraction
+    boundsFromDiff diff =
+      case activeVars of
+        []
+          | diff.constant P.+ diff.nlLower P.> rational 0 -> Infeasible
+          | otherwise -> Bounds []
+        [(var, coeff)]
+          | coeff > 0 -> Bounds [(var, (Nothing, Just bound))]
+          | coeff < 0 -> Bounds [(var, (Just bound, Nothing))]
+          | otherwise -> Bounds []
+          where
+            bound = (P.negate diff.constant P.- diff.nlLower) P./ coeff
+        _ -> Bounds []
       where
-        extractVarBound form =
-          case lookupFormNode form form.root of
-            FormComp {comp, e1, e2} ->
-              case (lookupFormExprNode form e1, comp, lookupFormExprNode form e2) of
-                (ExprVar var, CompLe, ExprLit q) -> [(var, (Nothing, Just q))]
-                (ExprVar var, CompLeq, ExprLit q) -> [(var, (Nothing, Just q))]
-                (ExprLit q, CompLe, ExprVar var) -> [(var, (Just q, Nothing))]
-                (ExprLit q, CompLeq, ExprVar var) -> [(var, (Just q, Nothing))]
-                _ -> []
-            _ -> [] -- not a comparison, shouldn't happen since we only call this on IEs
+        activeVars = [(var, coeff) | (var, coeff) <- Map.toList diff.coefficients, coeff /= 0]
+
     varDomains = scope.box_.varDomains
     varDomainsWithInequalities = foldl applyBound varDomains varBoundsFromInequalities
       where
-        applyBound varDoms (var, (Just qL, _)) =
-          Map.update (updateLower qL) var varDoms
-        applyBound varDoms (var, (_, Just qU)) =
-          Map.update (updateUpper qU) var varDoms
-        applyBound varDoms _ = varDoms -- shouldn't happen since we only call this on IEs
+        applyBound varDoms (var, (maybeQL, maybeQU)) =
+          applyUpper $ applyLower varDoms
+          where
+            applyLower =
+              case maybeQL of
+                Just qL -> Map.update (updateLower qL) var
+                Nothing -> P.id
+            applyUpper =
+              case maybeQU of
+                Just qU -> Map.update (updateUpper qU) var
+                Nothing -> P.id
         updateLower qL ball =
-          -- trace
-          --   ( printf
-          --       "updateLower: qL = %s, prec = %s, qLB = %s, ball = %s, result = %s"
-          --       (show qL)
-          --       (show (getPrecision ball))
-          --       (show qLMB)
-          --       (show ball)
-          --       (show res)
-          --   )
           Just res
           where
             res = qLMB `max` ball
             qLMB = mpBallP (getPrecision ball) qL
         updateUpper qU ball =
-          -- trace
-          --   ( printf
-          --       "updateUpper: qU = %s, prec = %s, qUB = %s, ball = %s, result = %s"
-          --       (show qU)
-          --       (show (getPrecision ball))
-          --       (show qUMB)
-          --       (show ball)
-          --       (show res)
-          --   )
           Just res
           where
             res = qUMB `min` ball
             qUMB = mpBallP (getPrecision ball) qU
     isImprovement =
-      -- trace
-      --   ( printf
-      --       "linearPruneCIE:\n varDomains = %s\n varDomainsWithInequalities = %s\n improvements = %s\n isImprovement = %s"
-      --       (show varDomains)
-      --       (show varDomainsWithInequalities)
-      --       (show improvements)
-      --       (show res)
-      --   )
       res
       where
         res = P.any (> 0.1) $ Map.elems improvements

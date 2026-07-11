@@ -8,6 +8,7 @@ module LPPaver2.BranchAndPrune
     LPPBPResult,
     LPPBPParams (..),
     lppBranchAndPrune,
+    lppBranchAndPruneSimplex,
     getStepBoxes,
     getStepExprs,
     getStepForms,
@@ -23,8 +24,9 @@ import Control.Monad.Logger (MonadLogger)
 import Data.Hashable (Hashable (hash))
 import Data.Map qualified as Map
 import GHC.Records
-import LPPaver2.LinearPrune (LinearPruneResult (..), linearPrune)
+import LPPaver2.LinearPrune (LinearPruneResult (..), linearPruneWithEvalBounds)
 import LPPaver2.RealConstraints
+import LPPaver2.SimplexPrune (simplexPruneWithEvalBounds)
 import MixedTypesNumPrelude
 import Text.Printf (printf)
 -- import Debug.Trace (trace)
@@ -35,6 +37,7 @@ type LPPPaving = BP.Paving Form Box Boxes
 
 type LPPStep r = BP.Step LPPProblem LPPPaving (EvaluatedForm r)
 
+-- a map of hashes to boxes, for all boxes in the step pavings AND problems
 getStepBoxes :: LPPStep r -> BoxStore
 getStepBoxes step =
   scopesStore `Map.union` pavingBoxStore
@@ -48,6 +51,8 @@ getStepBoxes step =
     pavingsScopes = [p.scope | p <- pavings]
     pavingBoxStore = Map.unions [paving.inner.store `Map.union` paving.outer.store | paving <- pavings]
 
+
+-- a map of expr hashes to exprs, for all exprs in the step problems AND all exprs in undecided pavings
 getStepExprs :: LPPStep r -> ExprStore
 getStepExprs step =
   constraintsStore `Map.union` undecidedStore
@@ -62,6 +67,7 @@ getStepExprs step =
     problems = BP.getStepProblems step
     pavings = BP.getStepPavings step
 
+-- a map of form hashes to forms, for all forms in the step problems AND all forms in undecided pavings
 getStepForms :: LPPStep r -> FormStore
 getStepForms step =
   constraintsStore `Map.union` undecidedStore `Map.union` basicFormStore
@@ -76,6 +82,7 @@ getStepForms step =
     problems = BP.getStepProblems step
     pavings = BP.getStepPavings step
 
+-- form store with true and false
 basicFormStore :: FormStore
 basicFormStore =
   Map.fromList
@@ -92,6 +99,7 @@ data LPPBPParams = LPPBPParams
     shouldLog :: Bool
   }
 
+-- give up bpp if all domains are under the threshold
 shouldGiveUpOnBPLPPProblem :: Rational -> LPPProblem -> Bool
 shouldGiveUpOnBPLPPProblem giveUpAccuracy (BP.Problem {scope}) =
   all accuracyBelowThreshold domainsOfSplitVars
@@ -103,8 +111,7 @@ shouldGiveUpOnBPLPPProblem giveUpAccuracy (BP.Problem {scope}) =
       ]
 
     accuracyBelowThreshold :: MPBall -> Bool
-    accuracyBelowThreshold ball = 
-      -- trace (printf "Checking if box with radius %s should be given up (threshold: %s)" (show (MP.radius ball)) (show $ double giveUpAccuracy)) $
+    accuracyBelowThreshold ball =
       diameter <= giveUpAccuracy
       where
         diameter = 2 * MP.radius ball
@@ -115,13 +122,13 @@ lppBranchAndPrune ::
     MonadUnliftIOWithState m,
     CanEval r,
     HasKleeneanComparison r,
+    ConvertibleExactly r MP.MPBall,
     BP.CanControlSteps m (LPPStep r)
   ) =>
   r ->
   LPPBPParams ->
   m LPPBPResult
 lppBranchAndPrune (sampleR :: r) (LPPBPParams {..}) = do
-  -- conn <- liftIO $ Redis.checkedConnect Redis.defaultConnectInfo
   BP.branchAndPruneM
     ( BP.Params
         { BP.problem,
@@ -138,8 +145,34 @@ lppBranchAndPrune (sampleR :: r) (LPPBPParams {..}) = do
     dummyPriorityQueue :: BoxStack
     dummyPriorityQueue = BoxStack [problem]
 
+lppBranchAndPruneSimplex ::
+  ( MonadLogger m,
+    MonadIO m,
+    MonadUnliftIOWithState m,
+    CanEval r,
+    HasKleeneanComparison r,
+    ConvertibleExactly r MP.MPBall,
+    BP.CanControlSteps m (LPPStep r)
+  ) =>
+  r ->
+  LPPBPParams ->
+  m LPPBPResult
+lppBranchAndPruneSimplex (sampleR :: r) (LPPBPParams {..}) =
+  BP.branchAndPruneM
+    ( BP.Params
+        { BP.problem,
+          BP.pruningMethod = WithSimplex sampleR,
+          BP.shouldAbort = const Nothing,
+          BP.shouldGiveUpSolvingProblem = shouldGiveUpOnBPLPPProblem giveUpAccuracy :: LPPProblem -> Bool,
+          BP.dummyPriorityQueue = BoxStack [problem],
+          BP.dummyEvalInfo = EvaluatedForm {form = formTrue, exprValues = Map.empty, formValues = Map.empty} :: EvaluatedForm r,
+          BP.maxThreads,
+          BP.shouldLog
+        }
+    )
+
 instance
-  (CanEval r, HasKleeneanComparison r, Applicative m) =>
+  (CanEval r, HasKleeneanComparison r, ConvertibleExactly r MP.MPBall, Applicative m) =>
   BP.CanPrune m r Form Box Boxes (EvaluatedForm r)
   where
   pruneProblemM sampleR (BP.Problem {scope, constraint}) =
@@ -158,7 +191,7 @@ instance
           CertainFalse -> BP.pavingOuter scope (mkBoxes scope)
           _ ->
             -- if not decided, see if linear pruning can decide the problem or at least reduce the box:
-            case linearPrune simplifiedFormProblem of
+            case linearPruneWithEvalBounds simplifiedFormProblem simplificationResult.evaluatedForm.exprValues of
               Just linearPruneResult ->
                 -- if linear pruning can help, return the paving with the reduced box and simplified form:
                 mkLinearPrunePaving scope simplifiedForm linearPruneResult
@@ -177,7 +210,7 @@ mkLinearPrunePaving scope simplifiedForm LinearPruneResult {maybeRemainingBox, r
         then BP.pavingInner scope (mkBoxes scope) -- true on scope
         else BP.pavingOuter scope (mkBoxes scope) -- false on scope
     Just remainingBox ->
-      -- linear pruning 
+      -- linear pruning
       let remainingProblem = BP.Problem {scope = remainingBox, constraint = simplifiedForm}
           decidedBoxes = mkBoxes $ mkBoxDifference scope remainingBox
        in BP.Paving
@@ -191,9 +224,43 @@ mkLinearPrunePaving scope simplifiedForm LinearPruneResult {maybeRemainingBox, r
 
 newtype BoxStack = BoxStack [LPPProblem]
 
+-- | Wrapper to select simplex-enhanced pruning at the type level.
+newtype WithSimplex r = WithSimplex r
+
+instance
+  (CanEval r, HasKleeneanComparison r, MonadIO m, ConvertibleExactly r MP.MPBall) =>
+  BP.CanPrune m (WithSimplex r) Form Box Boxes (EvaluatedForm r)
+  where
+  pruneProblemM (WithSimplex (sampleR :: r)) (BP.Problem {scope, constraint}) = do
+    let simplificationResult = simplifyEvalForm sampleR scope constraint
+        simplifiedForm = simplificationResult.evaluatedForm.form
+        -- remove unused variables from the split order:
+        simplifiedScope = boxRestrictSplitOrder (formVariables simplifiedForm) scope
+        simplifiedFormProblem = BP.Problem {scope = simplifiedScope, constraint = simplifiedForm}
+    pavingP <- case getFormDecision simplifiedForm of
+      CertainTrue -> pure $ BP.pavingInner scope (mkBoxes scope)
+      CertainFalse -> pure $ BP.pavingOuter scope (mkBoxes scope)
+      TrueOrFalse -> do
+        -- try simplex pruning first
+        simplexResult <- simplexPruneWithEvalBounds simplifiedScope simplifiedForm simplificationResult.evaluatedForm.exprValues
+        case simplexResult of
+          Just linearPruneResult ->
+            pure $ mkLinearPrunePaving scope simplifiedForm linearPruneResult
+          Nothing ->
+            -- fall back to basic linear pruning
+            case linearPruneWithEvalBounds simplifiedFormProblem simplificationResult.evaluatedForm.exprValues of
+              Just linearPruneResult ->
+                pure $ mkLinearPrunePaving scope simplifiedForm linearPruneResult
+              Nothing ->
+                pure $ BP.pavingUndecided scope [simplifiedFormProblem]
+    pure (pavingP, simplificationResult.evaluatedForm)
+    where
+      mkBoxes box = Boxes {store = Map.fromList [(box.boxHash, box)]}
+
 instance BP.IsPriorityQueue BoxStack LPPProblem where
   singletonQueue e = BoxStack [e]
   queueToList (BoxStack list) = list
+  queuePickNext :: BoxStack -> Maybe (LPPProblem, BoxStack)
   queuePickNext (BoxStack []) = Nothing
   queuePickNext (BoxStack (e : es)) = Just (e, BoxStack es)
   queueAddMany (BoxStack es) new_es = BoxStack (new_es ++ es)

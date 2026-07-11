@@ -55,6 +55,8 @@ extra-deps:
   - aern2-affarith
 - git: git@github.com:michalkonecny/branch-and-prune.git
   commit: 'c496038d44c328ae79fd7acd0b015bd7f9428294'
+- github: rasheedja/simplex-method
+  commit: '389ea32300b536b20b42b80c9ee23b156e736dc1'
 
 # Override default flag values for local packages and extra-deps
 # flags: {}
