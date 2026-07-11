@@ -24,7 +24,7 @@ import Control.Monad.Logger (MonadLogger)
 import Data.Hashable (Hashable (hash))
 import Data.Map qualified as Map
 import GHC.Records
-import LPPaver2.LinearPrune (LinearPruneResult (..), linearPrune)
+import LPPaver2.LinearPrune (LinearPruneResult (..), linearPruneWithEvalBounds)
 import LPPaver2.RealConstraints
 import LPPaver2.SimplexPrune (simplexPruneWithEvalBounds)
 import MixedTypesNumPrelude
@@ -122,6 +122,7 @@ lppBranchAndPrune ::
     MonadUnliftIOWithState m,
     CanEval r,
     HasKleeneanComparison r,
+    ConvertibleExactly r MP.MPBall,
     BP.CanControlSteps m (LPPStep r)
   ) =>
   r ->
@@ -171,7 +172,7 @@ lppBranchAndPruneSimplex (sampleR :: r) (LPPBPParams {..}) =
     )
 
 instance
-  (CanEval r, HasKleeneanComparison r, Applicative m) =>
+  (CanEval r, HasKleeneanComparison r, ConvertibleExactly r MP.MPBall, Applicative m) =>
   BP.CanPrune m r Form Box Boxes (EvaluatedForm r)
   where
   pruneProblemM sampleR (BP.Problem {scope, constraint}) =
@@ -190,7 +191,7 @@ instance
           CertainFalse -> BP.pavingOuter scope (mkBoxes scope)
           _ ->
             -- if not decided, see if linear pruning can decide the problem or at least reduce the box:
-            case linearPrune simplifiedFormProblem of
+            case linearPruneWithEvalBounds simplifiedFormProblem simplificationResult.evaluatedForm.exprValues of
               Just linearPruneResult ->
                 -- if linear pruning can help, return the paving with the reduced box and simplified form:
                 mkLinearPrunePaving scope simplifiedForm linearPruneResult
@@ -247,7 +248,7 @@ instance
             pure $ mkLinearPrunePaving scope simplifiedForm linearPruneResult
           Nothing ->
             -- fall back to basic linear pruning
-            case linearPrune simplifiedFormProblem of
+            case linearPruneWithEvalBounds simplifiedFormProblem simplificationResult.evaluatedForm.exprValues of
               Just linearPruneResult ->
                 pure $ mkLinearPrunePaving scope simplifiedForm linearPruneResult
               Nothing ->

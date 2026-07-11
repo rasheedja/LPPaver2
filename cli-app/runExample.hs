@@ -292,7 +292,7 @@ instance (Monad m, MonadUnliftIOWithState m) => MonadUnliftIOWithState (LoggingT
   absorbState s = lift $ absorbState s
 
 mainWithArgs ::
-  (CanEval r, HasKleeneanComparison r, A.ToJSON r) =>
+  (CanEval r, HasKleeneanComparison r, A.ToJSON r, ConvertibleExactly r MP.MPBall) =>
   r ->
   (LPPProblem, Rational, Int, Bool) ->
   IO ()
