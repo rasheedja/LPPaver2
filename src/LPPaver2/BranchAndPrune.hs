@@ -31,7 +31,6 @@ import MixedTypesNumPrelude
 import Text.Printf (printf)
 -- import Debug.Trace (trace)
 
--- type aliases look correct - should verify
 type LPPProblem = BP.Problem Form Box
 
 type LPPPaving = BP.Paving Form Box Boxes
@@ -112,8 +111,7 @@ shouldGiveUpOnBPLPPProblem giveUpAccuracy (BP.Problem {scope}) =
       ]
 
     accuracyBelowThreshold :: MPBall -> Bool
-    accuracyBelowThreshold ball = 
-      -- trace (printf "Checking if box with radius %s should be given up (threshold: %s)" (show (MP.radius ball)) (show $ double giveUpAccuracy)) $
+    accuracyBelowThreshold ball =
       diameter <= giveUpAccuracy
       where
         diameter = 2 * MP.radius ball
@@ -130,7 +128,6 @@ lppBranchAndPrune ::
   LPPBPParams ->
   m LPPBPResult
 lppBranchAndPrune (sampleR :: r) (LPPBPParams {..}) = do
-  -- conn <- liftIO $ Redis.checkedConnect Redis.defaultConnectInfo
   BP.branchAndPruneM
     ( BP.Params
         { BP.problem,
@@ -212,7 +209,7 @@ mkLinearPrunePaving scope simplifiedForm LinearPruneResult {maybeRemainingBox, r
         then BP.pavingInner scope (mkBoxes scope) -- true on scope
         else BP.pavingOuter scope (mkBoxes scope) -- false on scope
     Just remainingBox ->
-      -- linear pruning 
+      -- linear pruning
       let remainingProblem = BP.Problem {scope = remainingBox, constraint = simplifiedForm}
           decidedBoxes = mkBoxes $ mkBoxDifference scope remainingBox
        in BP.Paving
@@ -262,7 +259,6 @@ instance
               Nothing ->
                 pure $ BP.pavingUndecided scope [simplifiedFormProblem]
     pure (pavingP, simplificationResult.evaluatedForm)
-    -- pure (pavingP, error "hi")
     where
       mkBoxes box = Boxes {store = Map.fromList [(box.boxHash, box)]}
 
