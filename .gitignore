@@ -16,6 +16,10 @@ package-lock.json
 dist/
 *.code-workspace
 .stack-work/
+dump.rdb
+*.log
 *~
 
 lppaver2-frontend/.vite
+
+.direnv/
