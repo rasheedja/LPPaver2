@@ -19,7 +19,7 @@ import Data.Text (Text)
 import Data.Text.Encoding qualified as T
 import GHC.Generics (Generic)
 import GHC.Records
-import LPPaver2.BranchAndPrune (LPPBPParams (..), LPPStep, getStepBoxes, getStepExprs, getStepForms, lppBranchAndPrune)
+import LPPaver2.BranchAndPrune (LPPBPParams (..), LPPStep, LPPPruningMethod (..), getStepBoxes, getStepExprs, getStepForms, lppBranchAndPrune)
 import LPPaver2.ExampleProblems (LPPProblemWithParamSpec (..), exampleProblems, exampleProblemsList, substituteParams)
 import LPPaver2.Export ()
 import LPPaver2.RealConstraints (EvalArithmetic (..), ExprStore, FormStore)
@@ -175,6 +175,7 @@ data RunSolverRequest = RunSolverRequest
     problemName :: String,
     paramValues :: Map.Map String Double,
     arithmetic :: Arithmetic,
+    useSimplex :: Bool,
     giveUpAccuracy :: Double,
     numberOfThreads :: Int
   }
@@ -195,9 +196,13 @@ instance IsRequestResponse RunSolverRequest where
     let runId = request.runId
     respond (SolverRunStatusUpdate {runId, status = SolverRunning})
     let params = mkParams request
+    let pruningMethod = LPPPruningMethod
+          { evalArithmetic = getEvalArithmetic request.arithmetic,
+            useSimplex = request.useSimplex
+          }
     stateMV <- liftIO $ newMVar state
     _ <- runStdoutLoggingT $ do
-      lppBranchAndPrune (getEvalArithmetic request.arithmetic) (lppStepsController runId stateMV) params
+      lppBranchAndPrune pruningMethod (lppStepsController runId stateMV) params
     respond (SolverRunStatusUpdate {runId, status = SolverFinished})
     liftIO $ takeMVar stateMV
 

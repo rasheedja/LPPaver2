@@ -7,6 +7,7 @@ module LPPaver2.BranchAndPrune
     LPPStep,
     LPPBPResult,
     LPPBPParams (..),
+    LPPPruningMethod (..),
     lppBranchAndPrune,
     getStepBoxes,
     getStepExprs,
@@ -17,14 +18,16 @@ where
 import AERN2.MP (Kleenean (..), MPBall)
 import AERN2.MP qualified as MP
 import BranchAndPrune.BranchAndPrune qualified as BP
+import Control.Monad.IO.Class (MonadIO)
 import Control.Monad.IO.Unlift (MonadUnliftIO)
 import Control.Monad.Logger (MonadLogger)
 import Data.Hashable (Hashable (hash))
 import Data.Map qualified as Map
 import GHC.Records
-import LPPaver2.LinearPrune (LinearPruneResult (..), linearPrune)
+import LPPaver2.LinearPrune (LinearPruneResult (..), linearPruneWithEvalValues)
 import LPPaver2.RealConstraints
 import LPPaver2.RealConstraints.Eval (EvaluatedFormR (..))
+import LPPaver2.SimplexPrune (CanProvideSimplexRelaxations, simplexPruneWithEvalValues)
 import MixedTypesNumPrelude
 import Text.Printf (printf)
 
@@ -93,6 +96,11 @@ data LPPBPParams = LPPBPParams
     shouldLog :: Bool
   }
 
+data LPPPruningMethod = LPPPruningMethod
+  { evalArithmetic :: EvalArithmetic,
+    useSimplex :: Bool
+  }
+
 shouldGiveUpOnBPLPPProblem :: Rational -> LPPProblem -> Bool
 shouldGiveUpOnBPLPPProblem giveUpAccuracy (BP.Problem {scope}) =
   all accuracyBelowThreshold domainsOfSplitVars
@@ -114,16 +122,16 @@ lppBranchAndPrune ::
   ( MonadLogger m,
     MonadUnliftIO m
   ) =>
-  EvalArithmetic ->
+  LPPPruningMethod ->
   BP.StepsController m LPPStep ->
   LPPBPParams ->
   m LPPBPResult
-lppBranchAndPrune evalArithmetic lppStepsController (LPPBPParams {..}) = do
+lppBranchAndPrune pruningMethod lppStepsController (LPPBPParams {..}) = do
   BP.branchAndPruneM
     lppStepsController
     ( BP.Params
         { BP.problem,
-          BP.pruningMethod = evalArithmetic,
+          BP.pruningMethod = pruningMethod,
           BP.shouldAbort = const Nothing,
           BP.shouldGiveUpSolvingProblem = shouldGiveUpOnBPLPPProblem giveUpAccuracy :: LPPProblem -> Bool,
           BP.dummyPriorityQueue,
@@ -137,36 +145,60 @@ lppBranchAndPrune evalArithmetic lppStepsController (LPPBPParams {..}) = do
     dummyPriorityQueue = BoxStack [problem]
 
 instance
-  (Applicative m) =>
-  BP.CanPrune m EvalArithmetic Form Box Boxes EvaluatedForm
+  (MonadIO m) =>
+  BP.CanPrune m LPPPruningMethod Form Box Boxes EvaluatedForm
   where
-  pruneProblemM evalArithmetic (BP.Problem {scope, constraint}) =
+  pruneProblemM pruningMethod (BP.Problem {scope, constraint}) = do
+    pavingP <-
+      -- first see if simple evaluation decides the problem:
+      case getFormDecision simplifiedForm of
+        CertainTrue -> pure $ BP.pavingInner scope (mkBoxes scope)
+        CertainFalse -> pure $ BP.pavingOuter scope (mkBoxes scope)
+        _ -> pruneUncertain
     pure (pavingP, simplificationResult.evaluatedForm)
     where
-      simplificationResult = simplifyEvalForm evalArithmetic scope constraint
-      simplifiedForm = case simplificationResult.evaluatedForm of
+      simplificationResult = simplifyEvalForm pruningMethod.evalArithmetic scope constraint
+      evaluatedForm = simplificationResult.evaluatedForm
+      simplifiedForm = case evaluatedForm of
         EvaluatedFormMPBall (EvaluatedFormR {form}) -> form
         EvaluatedFormAffine (EvaluatedFormR {form}) -> form
       -- remove unused variables from the split order:
       simplifiedScope = boxRestrictSplitOrder (formVariables simplifiedForm) scope
       simplifiedFormProblem = BP.Problem {scope = simplifiedScope, constraint = simplifiedForm}
 
-      pavingP =
-        -- first see if simple evaluation decides the problem:
-        case getFormDecision simplifiedForm of
-          CertainTrue -> BP.pavingInner scope (mkBoxes scope)
-          CertainFalse -> BP.pavingOuter scope (mkBoxes scope)
-          _ ->
-            -- if not decided, see if linear pruning can decide the problem or at least reduce the box:
-            case linearPrune simplifiedFormProblem of
-              Just linearPruneResult ->
-                -- if linear pruning can help, return the paving with the reduced box and simplified form:
-                mkLinearPrunePaving scope simplifiedForm linearPruneResult
-              _ ->
-                -- if linear pruning cannot help, return the simplified problem as undecided with unchanged scope:
-                BP.pavingUndecided scope [simplifiedFormProblem]
-        where
-          mkBoxes box = Boxes {store = Map.fromList [(box.boxHash, box)]}
+      mkBoxes box = Boxes {store = Map.fromList [(box.boxHash, box)]}
+
+      pruneUncertain =
+        case evaluatedForm of
+          EvaluatedFormMPBall (EvaluatedFormR {exprValues}) ->
+            pruneWithEvalValues pruningMethod.useSimplex scope simplifiedFormProblem exprValues
+          EvaluatedFormAffine (EvaluatedFormR {exprValues}) ->
+            pruneWithEvalValues pruningMethod.useSimplex scope simplifiedFormProblem exprValues
+
+pruneWithEvalValues ::
+  (MonadIO m, CanProvideSimplexRelaxations r) =>
+  Bool ->
+  Box ->
+  BP.Problem Form Box ->
+  Map.Map ExprHash r ->
+  m (BP.Paving Form Box Boxes)
+pruneWithEvalValues useSimplex scope simplifiedFormProblem exprValues = do
+  maybeSimplexResult <-
+    if useSimplex
+      then simplexPruneWithEvalValues simplifiedFormProblem.scope simplifiedForm exprValues
+      else pure Nothing
+  case maybeSimplexResult of
+    Just simplexResult -> pure $ mkLinearPrunePaving scope simplifiedForm simplexResult
+    Nothing ->
+      -- Defensive fallback: simplex currently subsumes all relaxations supported
+      -- by linear pruning, but retain this for future solver/relaxation changes.
+      case linearPruneWithEvalValues simplifiedFormProblem exprValues of
+        Just linearPruneResult ->
+          pure $ mkLinearPrunePaving scope simplifiedForm linearPruneResult
+        _ ->
+          pure $ BP.pavingUndecided scope [simplifiedFormProblem]
+  where
+    simplifiedForm = simplifiedFormProblem.constraint
 
 mkLinearPrunePaving :: Box -> Form -> LinearPruneResult -> BP.Paving Form Box Boxes
 mkLinearPrunePaving scope simplifiedForm LinearPruneResult {maybeRemainingBox, removedRegionTruth} =
