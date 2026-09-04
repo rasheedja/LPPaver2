@@ -114,6 +114,7 @@ test-suite LPPaver2-test
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
+      LPPaver2.BranchAndPruneSpec
       LPPaver2.LinearPruneSpec
       LPPaver2.PruneSpecSupport
       LPPaver2.RealConstraints.EvalSpec
