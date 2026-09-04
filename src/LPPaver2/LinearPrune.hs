@@ -108,12 +108,19 @@ extractIEsFromCIE form0 = aux form0.root
         _ -> error "extractIEsFromCIE: not a CIE form"
 
 linearPruneCIE :: Box -> [Form] -> Maybe LinearPruneResult
-linearPruneCIE scope ies =
+linearPruneCIE scope ies
+  | hasEmptyDomain =
+      Just
+        LinearPruneResult
+          { maybeRemainingBox = Nothing,
+            removedRegionTruth = False
+          }
   -- trace (printf "linearPruneCIE: scope = %s, ies = %s" (show scope) (show ies)) $
   -- trace (printf "  varDomains = %s" (show varDomains)) $
   -- trace (printf "  varDomainsWithInequalities = %s" (show varDomainsWithInequalities)) $
   -- trace (printf "  isImprovement = %s" (show isImprovement)) $
-  if isImprovement then Just result else Nothing
+  | isImprovement = Just result
+  | otherwise = Nothing
   where
     varBoundsFromInequalities = P.concatMap extractVarBound ies
       where
@@ -129,6 +136,16 @@ linearPruneCIE scope ies =
             _ -> [] -- not a comparison, shouldn't happen since we only call this on IEs
     volumeVarDomains = -- pick domains of volume variables only, since parameter variables cannot be pruned
       Map.filterWithKey (\k _ -> k `Set.member` scope.box_.volumeVars) scope.box_.varDomains
+    hasEmptyDomain = P.any domainIsEmpty (Map.toList volumeVarDomains)
+    domainIsEmpty (var, ball) =
+      let (lower, upper) = P.foldl applyEndpointBound (rational lower0, rational upper0) relevantBounds
+          (lower0, upper0) = MP.endpoints ball
+          relevantBounds = [bound | (boundVar, bound) <- varBoundsFromInequalities, boundVar == var]
+       in lower > upper
+    applyEndpointBound (lower, upper) (maybeLower, maybeUpper) =
+      ( maybe lower (P.max lower) maybeLower,
+        maybe upper (P.min upper) maybeUpper
+      )
     varDomainsWithInequalities = foldl applyBound volumeVarDomains varBoundsFromInequalities
       where
         applyBound varDoms (var, (Just qL, _)) =

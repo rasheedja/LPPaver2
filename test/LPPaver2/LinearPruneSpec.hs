@@ -1,10 +1,12 @@
 module LPPaver2.LinearPruneSpec (spec) where
 
-import Test.Hspec
+import BranchAndPrune.BranchAndPrune qualified as BP
 import MixedTypesNumPrelude
 import LPPaver2.LinearPrune
+import LPPaver2.RealConstraints.Boxes (mkBox)
 import LPPaver2.RealConstraints.Form
 import LPPaver2.RealConstraints.Expr
+import Test.Hspec
 
 x :: Expr
 x = exprVar "x"
@@ -81,3 +83,19 @@ spec = describe "extractCIEorDIE" $ do
         cie2 = y <= lit2
         nonie = formTrue
     extractCIEorDIE ((nonie || cie1) && (nonie && cie2)) `shouldBe` Just (cie2, CIE)
+
+  it "detects contradictory extracted bounds" $ do
+    let form = (x <= exprLit 0.0) && (exprLit 1.0 <= x)
+        box = mkBox [("x", (0.0, 1.0))]
+
+    assertInfeasible $ linearPrune BP.Problem {scope = box, constraint = form}
+
+  it "detects extracted bounds outside the original box" $ do
+    let form = x <= exprLit (-1.0)
+        box = mkBox [("x", (0.0, 1.0))]
+
+    assertInfeasible $ linearPrune BP.Problem {scope = box, constraint = form}
+
+assertInfeasible :: Maybe LinearPruneResult -> Expectation
+assertInfeasible (Just LinearPruneResult {maybeRemainingBox = Nothing, removedRegionTruth = False}) = pure ()
+assertInfeasible _ = expectationFailure "expected an infeasible pruning result"
