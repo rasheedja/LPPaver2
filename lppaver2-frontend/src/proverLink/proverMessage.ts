@@ -46,6 +46,7 @@ export type RunSolverRequest = {
   problemName: string;
   paramValues: Record<string, number>;
   arithmetic: Arithmetic;
+  useSimplex: boolean;
   giveUpAccuracy: number;
   numberOfThreads: number;
 };

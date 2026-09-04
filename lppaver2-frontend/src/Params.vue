@@ -35,6 +35,7 @@
   const selectedArithType = ref<ArithType>('BallArithmetic');
   const selectedPrecision = ref<number>(100);
   const selectedMaxTerms = ref<number>(10);
+  const useSimplex = ref<boolean>(false);
 
   const selectedArithmetic = computed<Arithmetic>(() => {
     return selectedArithType.value === 'BallArithmetic'
@@ -68,6 +69,7 @@
       selectedProblemName.value,
       paramsObj,
       selectedArithmetic.value,
+      useSimplex.value,
       giveUpAccuracy.value,
     );
   }
@@ -119,6 +121,15 @@
       <option value="BallArithmetic">MP Interval Arithmetic</option>
       <option value="AffineArithmetic">MP Affine Arithmetic</option>
     </select>
+    <div class="form-check">
+      <input
+        class="form-check-input"
+        type="checkbox"
+        id="useSimplex"
+        v-model="useSimplex"
+      />
+      <label class="form-check-label" for="useSimplex">Use simplex pruning</label>
+    </div>
     <!-- Input max size of box before giving up -->
     <label for="giveUpAccuracy" class="form-label">Max box size: </label>
     <input
