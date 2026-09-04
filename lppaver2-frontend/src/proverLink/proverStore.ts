@@ -76,6 +76,7 @@ export const useProverStore = defineStore('prover', () => {
     problemName: string,
     paramValues: Record<string, number>,
     arithmetic: Arithmetic,
+    useSimplex: boolean,
     giveUpAccuracy: number,
     numberOfThreads: number = 1,
   ) {
@@ -88,6 +89,7 @@ export const useProverStore = defineStore('prover', () => {
         problemName,
         paramValues,
         arithmetic,
+        useSimplex,
         giveUpAccuracy,
         numberOfThreads,
       },
