@@ -5,6 +5,7 @@ module LPPaver2.RealConstraints.Eval
   ( CanGetVarDomain (..),
     CanEval,
     evalExpr,
+    evalExprWith,
     HasKleeneanComparison,
     simplifyEvalFormR,
     SimplifyFormResultR (..),
@@ -50,7 +51,24 @@ evalExpr ::
   Map.Map ExprHash r ->
   Map.Map ExprHash r
 evalExpr sampleR box expr =
-  evalNode expr.root
+  evalExprWith evaluateNode expr
+  where
+    evaluateNode _ ExprVar {var} = getVarDomain sampleR box var
+    evaluateNode _ ExprLit {lit} = convertExactlyWithSample sampleR lit
+    evaluateNode _ ExprUnary {unop, e1} = evalUnop unop e1
+    evaluateNode _ ExprBinary {binop, e1, e2} = evalBinop binop e1 e2
+
+-- | Evaluate an expression DAG using a caller-supplied node algebra.
+--
+-- Child hashes are replaced with their already-computed values before the
+-- algebra is called.  Values are memoised by 'ExprHash', including values
+-- supplied in the initial map, so shared subexpressions are evaluated once.
+evalExprWith ::
+  (ExprHash -> ExprF r -> r) ->
+  Expr ->
+  Map.Map ExprHash r ->
+  Map.Map ExprHash r
+evalExprWith evaluateNode expr = evalNode expr.root
   where
     nodes = expr.nodes
     evalNode h valuesSoFar =
@@ -60,22 +78,22 @@ evalExpr sampleR box expr =
         Nothing ->
           -- lookup the node details
           case Map.lookup h nodes of
-            Nothing -> error "evalExpr: a hash is missing from expr.nodes"
+            Nothing -> error "evalExprWith: a hash is missing from expr.nodes"
             Just node ->
               -- evaluate the node and it to the value dictionary
               case node of
-                ExprVar {var} -> Map.insert h (getVarDomain sampleR box var) valuesSoFar
-                ExprLit {lit} -> Map.insert h (convertExactlyWithSample sampleR lit) valuesSoFar
+                ExprVar {var} -> Map.insert h (evaluateNode h ExprVar {var}) valuesSoFar
+                ExprLit {lit} -> Map.insert h (evaluateNode h ExprLit {lit}) valuesSoFar
                 ExprUnary {unop, e1} ->
                   let valuesAfterE1 = evalNode e1 valuesSoFar
                       e1Value = valuesAfterE1 Map.! e1
-                   in Map.insert h (evalUnop unop e1Value) valuesAfterE1
+                   in Map.insert h (evaluateNode h ExprUnary {unop, e1 = e1Value}) valuesAfterE1
                 ExprBinary {binop, e1, e2} ->
                   let valuesAfterE1 = evalNode e1 valuesSoFar
                       e1Value = valuesAfterE1 Map.! e1
                       valuesAfterE2 = evalNode e2 valuesAfterE1
                       e2Value = valuesAfterE2 Map.! e2
-                   in Map.insert h (evalBinop binop e1Value e2Value) valuesAfterE2
+                   in Map.insert h (evaluateNode h ExprBinary {binop, e1 = e1Value, e2 = e2Value}) valuesAfterE2
 
 evalUnop ::
   ( CanNegSameType r,

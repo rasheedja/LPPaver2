@@ -2,7 +2,12 @@ module LPPaver2.LinearPrune
   ( extractCIEorDIE,
     IEFormType (..),
     linearPrune,
+    linearPruneWithEvalValues,
     LinearPruneResult (..),
+    LinearRelaxation (..),
+    CanLineariseEval (..),
+    linearRelaxation,
+    tightenBoxByBounds,
   )
 where
 
@@ -11,13 +16,16 @@ import AERN2.MP qualified as MP
 import BranchAndPrune.BranchAndPrune qualified as BP
 import Data.Map qualified as Map
 import Data.Set qualified as Set
-import Debug.Trace (trace)
 import GHC.Records
-import LPPaver2.RealConstraints (ExprF (..))
+import LPPaver2.Linearisation
+  ( CanLineariseEval (..),
+    LinearRelaxation (..),
+    linearRelaxation,
+  )
+import LPPaver2.RealConstraints (ExprHash, ExprStore, Var)
 import LPPaver2.RealConstraints.Boxes
 import LPPaver2.RealConstraints.Form
 import MixedTypesNumPrelude
-import Text.Printf (printf)
 import Prelude qualified as P
 
 -- |
@@ -90,11 +98,18 @@ data LinearPruneResult = LinearPruneResult
   }
 
 linearPrune :: BP.Problem Form Box -> Maybe LinearPruneResult
-linearPrune BP.Problem {scope, constraint} =
+linearPrune problem = linearPruneWithEvalValues problem (Map.empty :: Map.Map ExprHash MP.MPBall)
+
+linearPruneWithEvalValues ::
+  (CanLineariseEval r) =>
+  BP.Problem Form Box ->
+  Map.Map ExprHash r ->
+  Maybe LinearPruneResult
+linearPruneWithEvalValues BP.Problem {scope, constraint} exprValues =
   let maybeIEInfo = extractCIEorDIE constraint
    in case maybeIEInfo of
-        Just (cieForm, CIE) -> linearPruneCIE scope (extractIEsFromCIE cieForm)
-        Just (ieForm, IE) -> linearPruneCIE scope [ieForm] -- TODO: try both CIE and DIE and use the better result
+        Just (cieForm, CIE) -> linearPruneCIE scope exprValues (extractIEsFromCIE cieForm)
+        Just (ieForm, IE) -> linearPruneCIE scope exprValues [ieForm] -- TODO: try both CIE and DIE and use the better result
         -- TODO: implement linear pruning for disjunctions of inequalities
         _ -> Nothing -- not a form suitable for linear pruning
 
@@ -107,107 +122,170 @@ extractIEsFromCIE form0 = aux form0.root
         FormBinary {bconn = ConnAnd, f1, f2} -> aux f1 ++ aux f2
         _ -> error "extractIEsFromCIE: not a CIE form"
 
-linearPruneCIE :: Box -> [Form] -> Maybe LinearPruneResult
-linearPruneCIE scope ies
-  | hasEmptyDomain =
+data BoundExtraction
+  = Infeasible
+  | Bounds [(Var, (Maybe Rational, Maybe Rational))]
+
+data TightenResult
+  = TightenInfeasible
+  | TightenNoImprovement
+  | TightenImproved Box
+
+linearPruneCIE :: (CanLineariseEval r) => Box -> Map.Map ExprHash r -> [Form] -> Maybe LinearPruneResult
+linearPruneCIE scope exprValues ies
+  | any isInfeasible extractionResults =
       Just
         LinearPruneResult
           { maybeRemainingBox = Nothing,
             removedRegionTruth = False
           }
-  -- trace (printf "linearPruneCIE: scope = %s, ies = %s" (show scope) (show ies)) $
-  -- trace (printf "  varDomains = %s" (show varDomains)) $
-  -- trace (printf "  varDomainsWithInequalities = %s" (show varDomainsWithInequalities)) $
-  -- trace (printf "  isImprovement = %s" (show isImprovement)) $
-  | isImprovement = Just result
-  | otherwise = Nothing
+  | otherwise =
+      case tightenBoxByBoundsChecked scope varBoundsFromInequalities of
+        TightenInfeasible ->
+          Just
+            LinearPruneResult
+              { maybeRemainingBox = Nothing,
+                removedRegionTruth = False
+              }
+        TightenNoImprovement -> Nothing
+        TightenImproved newBox -> Just (makeResult newBox)
   where
-    varBoundsFromInequalities = P.concatMap extractVarBound ies
-      where
-        extractVarBound form =
-          case lookupFormNode form form.root of
-            FormComp {comp, e1, e2} ->
-              case (lookupFormExprNode form e1, comp, lookupFormExprNode form e2) of
-                (ExprVar var, CompLe, ExprLit q) -> [(var, (Nothing, Just q))]
-                (ExprVar var, CompLeq, ExprLit q) -> [(var, (Nothing, Just q))]
-                (ExprLit q, CompLe, ExprVar var) -> [(var, (Just q, Nothing))]
-                (ExprLit q, CompLeq, ExprVar var) -> [(var, (Just q, Nothing))]
-                _ -> []
-            _ -> [] -- not a comparison, shouldn't happen since we only call this on IEs
-    volumeVarDomains = -- pick domains of volume variables only, since parameter variables cannot be pruned
-      Map.filterWithKey (\k _ -> k `Set.member` scope.box_.volumeVars) scope.box_.varDomains
-    hasEmptyDomain = P.any domainIsEmpty (Map.toList volumeVarDomains)
-    domainIsEmpty (var, ball) =
-      let (lower, upper) = P.foldl applyEndpointBound (rational lower0, rational upper0) relevantBounds
-          (lower0, upper0) = MP.endpoints ball
-          relevantBounds = [bound | (boundVar, bound) <- varBoundsFromInequalities, boundVar == var]
-       in lower > upper
-    applyEndpointBound (lower, upper) (maybeLower, maybeUpper) =
-      ( maybe lower (P.max lower) maybeLower,
-        maybe upper (P.min upper) maybeUpper
-      )
-    varDomainsWithInequalities = foldl applyBound volumeVarDomains varBoundsFromInequalities
-      where
-        applyBound varDoms (var, (Just qL, _)) =
-          Map.update (updateLower qL) var varDoms
-        applyBound varDoms (var, (_, Just qU)) =
-          Map.update (updateUpper qU) var varDoms
-        applyBound varDoms _ = varDoms -- shouldn't happen since we only call this on IEs
-        updateLower qL ball =
-          -- trace
-          --   ( printf
-          --       "updateLower: qL = %s, prec = %s, qLB = %s, ball = %s, result = %s"
-          --       (show qL)
-          --       (show (getPrecision ball))
-          --       (show qLMB)
-          --       (show ball)
-          --       (show res)
-          --   )
-          Just res
+    extractionResults = P.map extractVarBound ies
+    varBoundsFromInequalities = P.concatMap boundsFromResult extractionResults
+
+    isInfeasible :: BoundExtraction -> Bool
+    isInfeasible Infeasible = True
+    isInfeasible _ = False
+
+    boundsFromResult :: BoundExtraction -> [(Var, (Maybe Rational, Maybe Rational))]
+    boundsFromResult (Bounds bounds) = bounds
+    boundsFromResult Infeasible = []
+
+    extractVarBound :: Form -> BoundExtraction
+    extractVarBound form =
+      case lookupFormNode form form.root of
+        FormComp {comp, e1, e2} ->
+          case comp of
+            CompLe -> boundsFromLessOrEqual form.nodesE e1 e2
+            CompLeq -> boundsFromLessOrEqual form.nodesE e1 e2
+            CompEq -> mergeExtractions (boundsFromLessOrEqual form.nodesE e1 e2) (boundsFromLessOrEqual form.nodesE e2 e1)
+            CompNeq -> Bounds []
+        _ -> Bounds [] -- not a comparison, shouldn't happen since we only call this on IEs
+    boundsFromLessOrEqual :: ExprStore -> ExprHash -> ExprHash -> BoundExtraction
+    boundsFromLessOrEqual exprNodes e1 e2 =
+      case linearRelaxation exprNodes exprValues e1 e2 of
+        Just relaxation -> boundsFromRelaxation relaxation
+        Nothing -> Bounds []
+
+    mergeExtractions :: BoundExtraction -> BoundExtraction -> BoundExtraction
+    mergeExtractions Infeasible _ = Infeasible
+    mergeExtractions _ Infeasible = Infeasible
+    mergeExtractions (Bounds b1) (Bounds b2) = Bounds (b1 P.++ b2)
+
+    boundsFromRelaxation :: LinearRelaxation -> BoundExtraction
+    boundsFromRelaxation relaxation =
+      case activeVars of
+        []
+          | relaxation.rhs < rational 0 -> Infeasible
+          | otherwise -> Bounds []
+        [(var, coeff)]
+          | coeff > 0 -> Bounds [(var, (Nothing, Just bound))]
+          | coeff < 0 -> Bounds [(var, (Just bound, Nothing))]
+          | otherwise -> Bounds []
           where
-            res = qLMB `max` ball
-            qLMB = mpBallP (getPrecision ball) qL
-        updateUpper qU ball =
-          -- trace
-          --   ( printf
-          --       "updateUpper: qU = %s, prec = %s, qUB = %s, ball = %s, result = %s"
-          --       (show qU)
-          --       (show (getPrecision ball))
-          --       (show qUMB)
-          --       (show ball)
-          --       (show res)
-          --   )
-          Just res
-          where
-            res = qUMB `min` ball
-            qUMB = mpBallP (getPrecision ball) qU
-    isImprovement =
-      -- trace
-      --   ( printf
-      --       "linearPruneCIE:\n varDomains = %s\n varDomainsWithInequalities = %s\n improvements = %s\n isImprovement = %s"
-      --       (show varDomains)
-      --       (show varDomainsWithInequalities)
-      --       (show improvements)
-      --       (show res)
-      --   )
-      res
+            bound = relaxation.rhs P./ coeff
+        _ -> Bounds []
       where
-        res = P.any (> 0.1) $ Map.elems improvements
-        improvements = Map.intersectionWith measureImprovement volumeVarDomains varDomainsWithInequalities
-        measureImprovement ballOld ballNew =
-          let rOld = MP.radius ballOld
-              rNew = MP.radius ballNew
-           in (rational rOld - rational rNew) / rational rOld
-    newBox =
-      boxWithHash
-        Box_
-          { varDomains = varDomainsWithInequalities,
-            splitOrder = scope.box_.splitOrder,
-            volumeVars = scope.box_.volumeVars,
-            except = Nothing
-          }
-    result =
+        activeVars = [(var, coeff) | (var, coeff) <- Map.toList relaxation.coefficients, coeff /= 0]
+
+    makeResult newBox =
       LinearPruneResult
         { maybeRemainingBox = Just newBox,
           removedRegionTruth = False
         }
+
+-- | Intersect a box with variable bounds, returning the tightened box only
+-- when at least one positive-width domain shrinks by more than ten percent.
+tightenBoxByBounds :: Box -> [(Var, (Maybe Rational, Maybe Rational))] -> Maybe Box
+tightenBoxByBounds scope bounds =
+  case tightenBoxByBoundsChecked scope bounds of
+    TightenImproved box -> Just box
+    TightenInfeasible -> Nothing
+    TightenNoImprovement -> Nothing
+
+tightenBoxByBoundsChecked :: Box -> [(Var, (Maybe Rational, Maybe Rational))] -> TightenResult
+tightenBoxByBoundsChecked scope bounds
+  | hasEmptyDomain = TightenInfeasible
+  | hasSignificantImprovement =
+      TightenImproved
+        $ boxWithHash
+          Box_
+            { varDomains = tightenedVarDomains,
+              volumeVars = scope.box_.volumeVars,
+              splitOrder = scope.box_.splitOrder,
+              except = Nothing
+            }
+  | otherwise = TightenNoImprovement
+  where
+    varDomains = scope.box_.varDomains
+    allTightenedVarDomains = foldl applyBound varDomains bounds
+    -- Parameter domains participate in contradiction detection but are never
+    -- changed in the result because only volume variables may be pruned.
+    tightenedVarDomains =
+      Map.mapWithKey
+        (\var newDomain ->
+           if var `Set.member` scope.box_.volumeVars
+             then newDomain
+             else varDomains Map.! var
+        )
+        allTightenedVarDomains
+
+    hasEmptyDomain = P.any domainIsEmpty (Map.toList varDomains)
+    domainIsEmpty (var, ball) =
+      let (lower, upper) = tightenedEndpoints var ball
+       in lower > upper
+
+    tightenedEndpoints var ball =
+      P.foldl applyEndpointBound (rational lower0, rational upper0) relevantBounds
+      where
+        (lower0, upper0) = MP.endpoints ball
+        relevantBounds = [bound | (boundVar, bound) <- bounds, boundVar == var]
+
+        applyEndpointBound (lower, upper) (maybeLower, maybeUpper) =
+          ( applyLower lower maybeLower,
+            applyUpper upper maybeUpper
+          )
+
+        applyLower lower (Just bound) = P.max lower bound
+        applyLower lower Nothing = lower
+        applyUpper upper (Just bound) = P.min upper bound
+        applyUpper upper Nothing = upper
+
+    applyBound varDoms (var, (maybeLower, maybeUpper)) = applyUpper $ applyLower varDoms
+      where
+        applyLower =
+          case maybeLower of
+            Just lower -> Map.update (Just . tightenLower lower) var
+            Nothing -> P.id
+        applyUpper =
+          case maybeUpper of
+            Just upper -> Map.update (Just . tightenUpper upper) var
+            Nothing -> P.id
+
+    tightenLower lower ball = mpBallP (getPrecision ball) lower `max` ball
+    tightenUpper upper ball = mpBallP (getPrecision ball) upper `min` ball
+
+    hasSignificantImprovement =
+      P.any significantImprovement
+        $ Map.elems
+        $ Map.intersectionWith (,) varDomains tightenedVarDomains
+
+    significantImprovement (oldDomain, newDomain) =
+      -- Keep the percentage calculation explicit, guarding the only possible
+      -- zero denominator: a fixed domain has radius zero.
+      oldRadius > rational 0
+        P.&& relativeImprovement > rational 1 P./ rational 10
+      where
+        oldRadius = rational $ MP.radius oldDomain
+        newRadius = rational $ MP.radius newDomain
+        relativeImprovement = (oldRadius P.- newRadius) P./ oldRadius

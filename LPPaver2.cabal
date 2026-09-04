@@ -37,10 +37,10 @@ library
       LPPaver2.RealConstraints.EvalArithmetic.MPBall
       LPPaver2.RealConstraints.Expr
       LPPaver2.RealConstraints.Form
+      LPPaver2.SimplexPrune
   other-modules:
-      Paths_LPPaver2
-  autogen-modules:
-      Paths_LPPaver2
+      LPPaver2.Linearisation
+      LPPaver2.RealConstraints.IntervalAD
   hs-source-dirs:
       src
   default-extensions:
@@ -64,6 +64,7 @@ library
     , mixed-types-num
     , monad-logger
     , mtl
+    , simplex-method
     , text
     , time
     , transformers
@@ -101,6 +102,7 @@ executable lppaver2-server
     , mixed-types-num
     , monad-logger
     , mtl
+    , simplex-method
     , text
     , time
     , transformers
@@ -113,7 +115,9 @@ test-suite LPPaver2-test
   main-is: Spec.hs
   other-modules:
       LPPaver2.LinearPruneSpec
+      LPPaver2.PruneSpecSupport
       LPPaver2.RealConstraints.EvalSpec
+      LPPaver2.SimplexPruneSpec
       Paths_LPPaver2
   autogen-modules:
       Paths_LPPaver2
@@ -129,6 +133,7 @@ test-suite LPPaver2-test
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -Wno-orphans -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       LPPaver2
+    , QuickCheck
     , aern2-affarith
     , aern2-mp
     , aeson
@@ -141,6 +146,7 @@ test-suite LPPaver2-test
     , mixed-types-num
     , monad-logger
     , mtl
+    , simplex-method
     , text
     , time
     , transformers
