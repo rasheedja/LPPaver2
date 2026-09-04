@@ -21,7 +21,7 @@ import Data.Aeson qualified as A
 import Data.Map qualified as Map
 import GHC.Generics (Generic)
 import GHC.Records
-import LPPaver2.BranchAndPrune (LPPBPParams (..), LPPStep, getStepBoxes, lppBranchAndPrune)
+import LPPaver2.BranchAndPrune (LPPBPParams (..), LPPPruningMethod (..), LPPStep, getStepBoxes, lppBranchAndPrune)
 import LPPaver2.ExampleProblems (LPPProblemWithParamSpec (..), exampleProblems, substituteParams)
 import LPPaver2.Export ()
 import LPPaver2.RealConstraints (EvalArithmetic (..))
@@ -56,6 +56,7 @@ data RunSolverRequest = RunSolverRequest
     problemName :: String,
     paramValues :: Map.Map String Double,
     arithmetic :: Arithmetic,
+    useSimplex :: Bool,
     giveUpAccuracy :: Double,
     numberOfThreads :: Int
   }
@@ -86,7 +87,11 @@ instance IsRequestResponse RunSolverRequest where
     flip finally (modifyState $ \state -> (ServerState.finishRun runId state, ())) $ do
       result <- runStdoutLoggingT $ do
         lppBranchAndPrune
-          (getEvalArithmetic request.arithmetic)
+          ( LPPPruningMethod
+              { evalArithmetic = getEvalArithmetic request.arithmetic,
+                useSimplex = request.useSimplex
+              }
+          )
           (lppStepsController runId modifyState) -- accummulates steps and boxes in the server state
           (mkParams request) {shouldAbort = abortWhen isConnectionClosed "client disconnected"}
       forM_ result.aborted $ \reason ->
