@@ -42,10 +42,10 @@ application pending = do
   putStrLn "Client connected."
   -- withPingThread conn 30 (return ()) (forever (requestResponse conn))
   stateMVar <- newMVar ServerState.new
-  stateChangeHandlersMVar <- newMVar ([] :: [ServerState -> IO ()])
+  stateChangeHandlersMVar <- newMVar ([] :: [ServerState -> ServerState -> IO ()])
   forever $ requestResponse stateMVar stateChangeHandlersMVar conn
 
-requestResponse :: MVar ServerState -> MVar [ServerState -> IO ()] -> WS.Connection -> IO ()
+requestResponse :: MVar ServerState -> MVar [ServerState -> ServerState -> IO ()] -> WS.Connection -> IO ()
 requestResponse stateMVar stateChangeHandlersMVar conn = do
   putStrLn "waiting for message from client..."
   msg <- WS.receiveData conn :: IO Text
@@ -63,17 +63,17 @@ requestResponse stateMVar stateChangeHandlersMVar conn = do
       )
   pure ()
   where
-    addStateChangeHandler :: (ServerState -> IO ()) -> IO ()
+    addStateChangeHandler :: (ServerState -> ServerState -> IO ()) -> IO ()
     addStateChangeHandler handler = do
       modifyMVar_ stateChangeHandlersMVar $ \handlers -> do
         pure (handlers ++ [handler])
     modifyState :: (ServerState -> (ServerState, t)) -> IO t
     modifyState fn = do
-      modifyMVar stateMVar $ \state -> do
-        let (newState, result) = fn state
+      modifyMVar stateMVar $ \oldState -> do
+        let (newState, result) = fn oldState
         -- execute the handlers for the new state
         handlers <- readMVar stateChangeHandlersMVar
-        mapM_ (\handler -> handler newState) handlers
+        mapM_ (\handler -> handler oldState newState) handlers
         -- save the new state to stateMVar
         pure (newState, result)
     respond :: Response -> IO ()
@@ -130,10 +130,18 @@ data NewFormulaNodesResponse = NewFormulaNodesResponse
 
 instance IsRequestResponse KeepGettingFormulaNodesRequest where
   type ResponseType KeepGettingFormulaNodesRequest = NewFormulaNodesResponse
-  handleRequest RequestHandlerInfo {stateOnRequest, respond} = do
-    let state = stateOnRequest
-    -- TODO
-    respond $ NewFormulaNodesResponse {exprs = state.exprs, forms = state.forms}
+  handleRequest RequestHandlerInfo {stateOnRequest = initState, respond, addStateChangeHandler} = do
+    -- Respond immediately with the initial state of formula nodes
+    respond $ NewFormulaNodesResponse {exprs = initState.exprs, forms = initState.forms}
+    -- Add a state change handler to respond with new formula nodes as they are added
+    addStateChangeHandler handler
+    where
+      handler oldState newState =
+        when (not (Map.null newExprs) || not (Map.null newForms)) $ do
+          respond $ NewFormulaNodesResponse {exprs = newExprs, forms = newForms}
+        where
+          newExprs = Map.difference newState.exprs oldState.exprs
+          newForms = Map.difference newState.forms oldState.forms
 
 instance A.FromJSON KeepGettingFormulaNodesRequest where
   parseJSON = A.genericParseJSON aesonOptions
@@ -275,7 +283,9 @@ type ModifyState t = (ServerState -> (ServerState, t)) -> IO t
 data RequestHandlerInfo request = RequestHandlerInfo
   { request :: request,
     stateOnRequest :: ServerState,
-    addStateChangeHandler :: (ServerState -> IO ()) -> IO (),
+    -- | Registers a handler that will be called whenever the server state changes.
+    -- | The handler receives the old state and the new state as arguments.
+    addStateChangeHandler :: (ServerState -> ServerState -> IO ()) -> IO (),
     modifyState :: forall t. ModifyState t,
     respond :: ResponseType request -> IO ()
   }

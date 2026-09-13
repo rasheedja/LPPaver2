@@ -150,14 +150,6 @@ export const useProverStore = defineStore('prover', () => {
             if (!_.isEmpty(newBoxes)) {
               boxes.value = { ...boxes.value, ...newBoxes };
             }
-
-            if (status === 'SolverFinished') {
-              // update all formula nodes in case there are new ones arising due to formula simplifications in the steps
-              sendProverRequest(ws, {
-                tag: 'RequestKeepGettingFormulaNodes',
-                contents: [],
-              });
-            }
           } else {
             console.warn(`Received run status for unknown runId ${runId}`);
           }
@@ -176,8 +168,15 @@ export const useProverStore = defineStore('prover', () => {
   // initialise the store
   /////////////////////////
 
-  // whenever exampleProblems is assigned, request the formula fragments stream
+  let listeningToFormulaFragments = false;
+
+  // when exampleProblems is first assigned, request the formula fragments stream
   watch(exampleProblems, async () => {
+    // do this only once when exampleProblems is first assigned
+    if (_.isEmpty(exampleProblems.value)) return;
+    if (listeningToFormulaFragments) return;
+    listeningToFormulaFragments = true;
+
     const ws = await getProverWS();
     const message: ProverRequest = {
       tag: 'RequestKeepGettingFormulaNodes',
