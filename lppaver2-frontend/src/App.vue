@@ -41,7 +41,7 @@
     x: 0,
     y: 4,
     w: 6,
-    h: 5,
+    h: 4,
   });
   const focusedPLayout = reactive<LayoutItem>({
     i: 'focusedP',
@@ -55,7 +55,7 @@
     x: 6,
     y: 4,
     w: 6,
-    h: 5,
+    h: 4,
   });
 
   const layout = reactive<LayoutItem[]>([

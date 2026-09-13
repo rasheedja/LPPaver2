@@ -1,0 +1,15 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Build and run lppaver2-server",
+			"type": "lldb",
+			"request": "launch",
+			"preLaunchTask": "stack build lppaver2-server",
+			"program": "${workspaceFolder}/.stack-work/install/x86_64-linux/e7e88adec8f53adc4635a2faea060c2cbcf586eebb91c9d003ad8f3f9ea8a1cd/9.6.7/bin/lppaver2-server",
+			"args": [],
+			"cwd": "${workspaceFolder}",
+			"terminal": "integrated"
+		}
+	]
+}

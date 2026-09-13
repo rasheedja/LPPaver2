@@ -11,7 +11,8 @@ import { getBoxVolume } from '@/boxes/boxes';
 export type ProverStateStats = {
   percentInner: number;
   percentOuter: number;
-  percentUnknown: number;
+  percentGivenUp: number;
+  percentTodo: number;
 };
 
 export const useStepsStore = defineStore('steps', () => {
@@ -41,7 +42,7 @@ export const useStepsStore = defineStore('steps', () => {
     // compute the volumes of the boxes in the steps
     let volumeInner = 0;
     let volumeOuter = 0;
-    let volumeUnknown = 0;
+    let volumeGivenUp = 0;
     steps.value.forEach((step) => {
       if (step.tag === 'ProgressStep') {
         // progress steps
@@ -54,14 +55,17 @@ export const useStepsStore = defineStore('steps', () => {
           volumeOuter += getBoxVolume(box);
         });
       } else if (step.tag === 'GiveUpOnProblemStep') {
-        volumeUnknown += getBoxVolume(proverStore.getBox(step.problem.scope));
+        volumeGivenUp += getBoxVolume(proverStore.getBox(step.problem.scope));
       }
     });
+
+    const volumeTodo = totalVolume - (volumeInner + volumeOuter + volumeGivenUp);
 
     return {
       percentInner: (100 * volumeInner) / totalVolume,
       percentOuter: (100 * volumeOuter) / totalVolume,
-      percentUnknown: (100 * volumeUnknown) / totalVolume,
+      percentGivenUp: (100 * volumeGivenUp) / totalVolume,
+      percentTodo: (100 * volumeTodo) / totalVolume,
     };
   });
 
@@ -75,30 +79,36 @@ export const useStepsStore = defineStore('steps', () => {
     zoomedProblem,
     previewProblem,
     setInitProblem,
+    resetSteps,
     stepFromProblem,
     focusedExprValues,
     stepsStats,
   };
 
-  async function previewProblem(problem: Problem) {
-    const step: Step = { tag: 'GiveUpOnProblemStep', problem };
-    steps.value.push(step);
-    const problemHash = problemToProblemHash(problem);
-    _problem2step.value[problemHash] = step;
-    setInitProblem(problem);
+  async function resetSteps() {
+    steps.value = [];
+    numberOfSteps.value = 0;
+    _problem2step.value = {};
+    setInitProblem(null);
   }
 
-  async function setInitProblem(initProblem: Problem) {
+  async function setInitProblem(initProblem: Problem | null) {
     rootProblem.value = initProblem;
     zoomedProblem.value = initProblem;
     focusedProblem.value = initProblem;
+    focusedProblemSubFormExpr.value = null;
   }
 
-  function stepFromProblem(p: Problem) {
+  async function previewProblem(problem: Problem) {
+    resetSteps();
+    setInitProblem(problem);
+  }
+
+  function stepFromProblem(p: Problem): Step | null {
     const problemHash = problemToProblemHash(p);
     const step = _problem2step.value[problemHash];
     if (!step) {
-      throw new Error(`Step not found for problem hash ${problemHash}`);
+      return null;
     }
     return step;
   }
@@ -114,21 +124,23 @@ export const useStepsStore = defineStore('steps', () => {
 
   watch(currentRunSteps, () => {
     if (!currentRunSteps.value) return;
-    const stepsExceptInit = currentRunSteps.value.filter((step) => step.tag !== 'InitStep');
-    steps.value = stepsExceptInit;
-    numberOfSteps.value = stepsExceptInit.length;
+    const stepsExceptInitDone = currentRunSteps.value.filter(
+      (step: Step) => step.tag !== 'InitStep' && step.tag !== 'DoneStep',
+    );
+    steps.value = stepsExceptInitDone;
+    numberOfSteps.value = stepsExceptInitDone.length;
     _problem2step.value = {};
     // build the problem2step mapping for all steps except InitStep
-    for (const step of stepsExceptInit) {
+    for (const step of stepsExceptInitDone) {
       const problem = getStepProblem(step);
       if (problem) {
         const problemHash = problemToProblemHash(problem);
         _problem2step.value[problemHash] = step;
       }
     }
-    // set the root problem to the problem of the first step (if it exists)
-    if (stepsExceptInit.length > 0) {
-      const firstStepProblem = getStepProblem(stepsExceptInit[0]!);
+    // if not set, set the root problem to the problem of the first step (if it exists)
+    if (rootProblem.value === null && stepsExceptInitDone.length > 0) {
+      const firstStepProblem = getStepProblem(stepsExceptInitDone[0]!);
       if (firstStepProblem) {
         setInitProblem(firstStepProblem);
       }

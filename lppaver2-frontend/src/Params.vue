@@ -4,7 +4,7 @@
   import { useStepsStore } from './steps/stepsStore';
   import { useProverStore } from './proverLink/proverStore.ts';
   import type { Arithmetic, ParamSpec } from './proverLink/proverMessage.ts';
-  import { getTruthColour } from './styling.ts';
+  import { getStepColour, getTruthColour } from './styling.ts';
 
   const stepsStore = useStepsStore();
   const { numberOfSteps, stepsStats } = storeToRefs(stepsStore);
@@ -64,6 +64,8 @@
       paramsObj[param.spec.paramName] = param.val;
     }
 
+    stepsStore.resetSteps();
+
     proverStore.startRun(
       selectedProblemName.value,
       paramsObj,
@@ -74,6 +76,7 @@
 
   watch(selectedProblem, (newProblem) => {
     if (newProblem) {
+      proverStore.resetRunId();
       stepsStore.previewProblem(newProblem.problem);
       params.value = newProblem.paramSpecs.map((spec) => ({
         spec,
@@ -146,7 +149,10 @@
         >Outer: {{ stepsStats.percentOuter.toFixed(2) }}%
       </span>
       <span class="p-1" :style="{ backgroundColor: getTruthColour('TrueOrFalse') }"
-        >Unknown: {{ stepsStats.percentUnknown.toFixed(2) }}%
+        >GivenUp: {{ stepsStats.percentGivenUp.toFixed(2) }}%
+      </span>
+      <span class="p-1" :style="{ backgroundColor: getStepColour(null) }"
+        >Todo: {{ stepsStats.percentTodo.toFixed(2) }}%
       </span>
     </div>
   </div>

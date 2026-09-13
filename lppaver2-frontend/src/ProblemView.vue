@@ -35,7 +35,7 @@
       return undefined;
     }
     const step = stepsStore.stepFromProblem(props.problem);
-    if (step.tag !== 'ProgressStep') {
+    if (step?.tag !== 'ProgressStep') {
       return undefined;
     }
 

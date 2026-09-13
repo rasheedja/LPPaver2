@@ -50,7 +50,8 @@ export function getStepProblem(step: Step): Problem | null {
   return 'problem' in step ? step.problem : null;
 }
 
-export function getSubProblems(step: Step): Problem[] {
+export function getSubProblems(step: Step | null): Problem[] {
+  if (!step) return [];
   switch (step.tag) {
     case 'ProgressStep':
       return [...step.progressPaving.undecided];
@@ -59,7 +60,8 @@ export function getSubProblems(step: Step): Problem[] {
   }
 }
 
-export function getStepTruthResult(step: Step): Kleenean {
+export function getStepTruthResult(step: Step | null): Kleenean {
+  if (!step) return 'TrueOrFalse';
   switch (step.tag) {
     case 'ProgressStep':
       const stepScope = step.problem.scope;

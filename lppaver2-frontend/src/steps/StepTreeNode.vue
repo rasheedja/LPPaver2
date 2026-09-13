@@ -17,6 +17,9 @@
   const step = computed(() => stepsStore.stepFromProblem(props.problem));
 
   const stepLabel = computed(() => {
+    if (step.value === null) {
+      return 'No Step';
+    }
     const stepTag = step.value.tag;
     const progressPaving = stepTag === 'ProgressStep' ? step.value.progressPaving : undefined;
 

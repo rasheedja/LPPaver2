@@ -91,10 +91,14 @@ export type FormOrExprHash =
   | { type: 'form'; formHash: FormHash }
   | { type: 'expr'; exprHash: ExprHash };
 
-export function formHashToForm(formHash: FormHash, dictF: FormDict, dictE: ExprDict): Form {
+export function formHashToForm(
+  formHash: FormHash,
+  dictF: FormDict,
+  dictE: ExprDict,
+): Form | undefined {
   const formF = dictF[formHash];
   if (!formF) {
-    throw new Error(`Form with hash ${formHash} not found in dict`);
+    return undefined;
   }
 
   switch (formF.tag) {
@@ -109,31 +113,40 @@ export function formHashToForm(formHash: FormHash, dictF: FormDict, dictE: ExprD
         hash: formHash,
       };
     case 'FormUnary':
+      const f = formHashToForm(formF.f1, dictF, dictE);
+      if (!f) return undefined;
       return {
         f: {
           tag: 'FormUnary',
           uconn: formF.uconn,
-          f1: formHashToForm(formF.f1, dictF, dictE),
+          f1: f,
         },
         hash: formHash,
       };
     case 'FormBinary':
+      const f1 = formHashToForm(formF.f1, dictF, dictE);
+      const f2 = formHashToForm(formF.f2, dictF, dictE);
+      if (!f1 || !f2) return undefined;
       return {
         f: {
           tag: 'FormBinary',
           bconn: formF.bconn,
-          f1: formHashToForm(formF.f1, dictF, dictE),
-          f2: formHashToForm(formF.f2, dictF, dictE),
+          f1: f1,
+          f2: f2,
         },
         hash: formHash,
       };
     case 'FormIfThenElse':
+      const fc = formHashToForm(formF.fc, dictF, dictE);
+      const ft = formHashToForm(formF.ft, dictF, dictE);
+      const ff = formHashToForm(formF.ff, dictF, dictE);
+      if (!fc || !ft || !ff) return undefined;
       return {
         f: {
           tag: 'FormIfThenElse',
-          fc: formHashToForm(formF.fc, dictF, dictE),
-          ft: formHashToForm(formF.ft, dictF, dictE),
-          ff: formHashToForm(formF.ff, dictF, dictE),
+          fc: fc,
+          ft: ft,
+          ff: ff,
         },
         hash: formHash,
       };

@@ -39,10 +39,11 @@ export const useProverStore = defineStore('prover', () => {
     exprs,
     forms,
     runs,
-    currentRunId: currentRunId,
+    currentRunId,
     getBox,
     getExpr,
     getForm,
+    resetRunId,
     startRun,
     getRunInfo,
     exampleProblems,
@@ -52,7 +53,7 @@ export const useProverStore = defineStore('prover', () => {
     return exprHashToExpr(exprHash, exprs.value);
   }
 
-  function getForm(formHash: FormHash): Form {
+  function getForm(formHash: FormHash): Form | undefined {
     return formHashToForm(formHash, forms.value, exprs.value);
   }
 
@@ -67,12 +68,16 @@ export const useProverStore = defineStore('prover', () => {
     return box;
   }
 
+  function resetRunId() {
+    currentRunId.value = null;
+  }
+
   async function startRun(
     problemName: string,
     paramValues: Record<string, number>,
     arithmetic: Arithmetic,
     giveUpAccuracy: number,
-    numberOfThreads: number = 4,
+    numberOfThreads: number = 1,
   ) {
     const ws = await getProverWS();
     const runId = generateRunId();
@@ -129,43 +134,24 @@ export const useProverStore = defineStore('prover', () => {
           boxes.value = { ...boxes.value, ...message.contents.boxes };
           break;
         }
-        case 'ResponseFormulaNodes': {
+        case 'ResponseNewFormulaNodes': {
           exprs.value = { ...exprs.value, ...message.contents.exprs };
           forms.value = { ...forms.value, ...message.contents.forms };
           break;
         }
         case 'ResponseSolverRunStatusUpdate': {
-          const { runId, status } = message.contents;
+          const { runId, status, newSteps, newBoxes } = message.contents;
           if (runs.value[runId]) {
             runs.value[runId].status = status;
-            if (status === 'SolverFinished') {
-              const message: ProverRequest = {
-                tag: 'RequestGetSteps',
-                contents: {
-                  runId,
-                },
-              };
-              // request the steps
-              sendProverRequest(ws, message);
+            // absorb new steps and boxes
+            if (!_.isEmpty(newSteps)) {
+              runs.value[runId].steps = [...runs.value[runId].steps, ...newSteps];
+            }
+            if (!_.isEmpty(newBoxes)) {
+              boxes.value = { ...boxes.value, ...newBoxes };
             }
           } else {
             console.warn(`Received run status for unknown runId ${runId}`);
-          }
-          break;
-        }
-        case 'ResponseSteps': {
-          const { runId, steps, boxes: newBoxes } = message.contents;
-          boxes.value = { ...boxes.value, ...newBoxes };
-          if (runs.value[runId]) {
-            // store the steps for this run
-            runs.value[runId].steps = steps;
-            // update all formula nodes in case there are new ones arising due to formula simplifications in the steps
-            sendProverRequest(ws, {
-              tag: 'RequestGetAllFormulaNodes',
-              contents: [],
-            });
-          } else {
-            console.warn(`Received steps for unknown runId ${runId}`);
           }
           break;
         }
@@ -182,11 +168,18 @@ export const useProverStore = defineStore('prover', () => {
   // initialise the store
   /////////////////////////
 
-  // whenever exampleProblems is assigned, request all formula nodes
+  let listeningToFormulaFragments = false;
+
+  // when exampleProblems is first assigned, request the formula fragments stream
   watch(exampleProblems, async () => {
+    // do this only once when exampleProblems is first assigned
+    if (_.isEmpty(exampleProblems.value)) return;
+    if (listeningToFormulaFragments) return;
+    listeningToFormulaFragments = true;
+
     const ws = await getProverWS();
     const message: ProverRequest = {
-      tag: 'RequestGetAllFormulaNodes',
+      tag: 'RequestKeepGettingFormulaNodes',
       contents: [],
     };
     sendProverRequest(ws, message);

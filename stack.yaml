@@ -13,6 +13,9 @@
 # resolver: ghc-9.6.2
 
 resolver: lts-22.44
+# If you change the resolver above, update .vscode/launch.json's "program"
+# path to match: run `stack path --local-install-root` and rebuild the
+# binary path as <that path>/bin/lppaver2-server
 
 #
 # The location of a snapshot can be provided as a file or url. Stack assumes

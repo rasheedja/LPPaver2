@@ -28,9 +28,9 @@ export type ParamSpec = {
 
 // getting formula nodes
 
-export type GetAllFormulaNodesRequest = [];
+export type KeepGettingFormulaNodesRequest = [];
 
-export type FormulaNodesResponse = {
+export type NewFormulaNodesResponse = {
   exprs: Record<ExprHash, ExprF<ExprHash>>;
   forms: Record<FormHash, FormF<ExprHash, FormHash>>;
 };
@@ -53,36 +53,24 @@ export type RunSolverRequest = {
 export type SolverRunStatusUpdate = {
   runId: string;
   status: RunStatus;
+  newSteps: Step[];
+  newBoxes: Record<BoxHash, Box>;
 };
 
 export type RunStatus = 'RequestSent' | 'SolverRunning' | 'SolverFinished';
-
-// getting solver steps
-
-export type GetStepsRequest = {
-  runId: string;
-};
-
-export type StepsResponse = {
-  runId: string;
-  steps: Step[];
-  boxes: Record<BoxHash, Box>;
-};
 
 //////////////////////////////
 // Overall request and response types
 
 export type ProverRequest =
   | { tag: 'RequestGetExampleProblems'; contents: GetExampleProblemsRequest }
-  | { tag: 'RequestGetAllFormulaNodes'; contents: GetAllFormulaNodesRequest }
-  | { tag: 'RequestRunSolver'; contents: RunSolverRequest }
-  | { tag: 'RequestGetSteps'; contents: GetStepsRequest };
+  | { tag: 'RequestKeepGettingFormulaNodes'; contents: KeepGettingFormulaNodesRequest }
+  | { tag: 'RequestRunSolver'; contents: RunSolverRequest };
 
 export type ProverResponse =
   | { tag: 'ResponseExampleProblems'; contents: ExampleProblemsResponse }
-  | { tag: 'ResponseFormulaNodes'; contents: FormulaNodesResponse }
-  | { tag: 'ResponseSolverRunStatusUpdate'; contents: SolverRunStatusUpdate }
-  | { tag: 'ResponseSteps'; contents: StepsResponse };
+  | { tag: 'ResponseNewFormulaNodes'; contents: NewFormulaNodesResponse }
+  | { tag: 'ResponseSolverRunStatusUpdate'; contents: SolverRunStatusUpdate };
 
 export function sendProverRequest(ws: Websocket, request: ProverRequest) {
   ws.send(JSON.stringify(request));

@@ -12,11 +12,8 @@ export function getTruthColour(kleenean: Kleenean): string {
   }
 }
 
-export function getStepColour(step: Step) {
-  if (step.tag === 'GiveUpOnProblemStep') {
-    return '#ffffff';
-    // return "#f0b0f0";
-  }
+export function getStepColour(step: Step | null) {
+  if (!step) return '#ffffff';
 
   const truthResult = getStepTruthResult(step);
   return getTruthColour(truthResult);

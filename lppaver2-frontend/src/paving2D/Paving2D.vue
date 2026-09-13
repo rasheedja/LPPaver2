@@ -6,7 +6,7 @@
   import { getSubProblems, type Step } from '@/steps/steps';
   import { useProverStore } from '@/proverLink/proverStore';
   import { useStepsStore } from '@/steps/stepsStore';
-  import type { Interval } from '@/formulas/evalInfo';
+  import { intervalWidth, type Interval } from '@/formulas/evalInfo';
   import type { Kleenean } from '@/formulas/kleenean';
   import type { Problem } from '@/problems/problems';
   import { pickXY, type BoxHash, type Var } from '@/boxes/boxes';
@@ -15,16 +15,13 @@
   const props = withDefaults(
     defineProps<{
       topProblem: Problem | null;
-      maxLevels?: number;
     }>(),
-    {
-      maxLevels: 20,
-    },
+    {},
   );
 
   const stepsStore = useStepsStore();
   const proverStore = useProverStore();
-  const { focusedProblem } = storeToRefs(stepsStore);
+  const { focusedProblem, steps } = storeToRefs(stepsStore);
 
   const plotDiv = ref<Plotly.PlotlyHTMLElement | null>(null);
 
@@ -51,22 +48,28 @@
     { immediate: true },
   );
 
+  const topXDomain = computed(() => topScopeBox.value?.box_.varDomains[xVar.value]);
+  const topYDomain = computed(() => topScopeBox.value?.box_.varDomains[yVar.value]);
+
+  const xMaxSizeToShow = computed(() =>
+    topXDomain.value ? intervalWidth(topXDomain.value) / 200 : 0,
+  );
+  const yMaxSizeToShow = computed(() =>
+    topYDomain.value ? intervalWidth(topYDomain.value) / 200 : 0,
+  );
+
   function getProblemTraces(problem: Problem | null): Partial<Plotly.Data>[] {
     if (!problem) {
       return [];
     }
 
-    const step: Step = stepsStore.stepFromProblem(problem);
-
-    // recursively get subproblem shapes
-    const subProblems = getSubProblems(step);
-    const subProblemTraces: Partial<Plotly.Data>[] = subProblems.flatMap(getProblemTraces);
+    const step: Step | null = stepsStore.stepFromProblem(problem);
 
     // is this a progress step with inner / outer regions?
     const innerRegionH =
-      step.tag === 'ProgressStep' ? step.progressPaving.inner.boxes[0] : undefined;
+      step?.tag === 'ProgressStep' ? step.progressPaving.inner.boxes[0] : undefined;
     const outerRegionH =
-      step.tag === 'ProgressStep' ? step.progressPaving.outer.boxes[0] : undefined;
+      step?.tag === 'ProgressStep' ? step.progressPaving.outer.boxes[0] : undefined;
 
     // get the main step box (possibly with an excluded region)
     // and the Kleenean truth value for that box
@@ -81,6 +84,7 @@
     const varDomains = box.box_.varDomains;
     const xDomain = varDomains[xVar.value];
     const yDomain = varDomains[yVar.value];
+    if (!xDomain || !yDomain) return [];
     const excludedRegion = box.box_.except;
     const excludedXDomain = excludedRegion ? excludedRegion[xVar.value] : undefined;
     const excludedYDomain = excludedRegion ? excludedRegion[yVar.value] : undefined;
@@ -102,6 +106,18 @@
       customdata: [problem.scope, problem.constraint],
       hoverinfo: 'none',
     };
+
+    // check whether to skip rendering subproblems
+    const isTooSmallToSubdivide =
+      intervalWidth(xDomain) < xMaxSizeToShow.value
+      && intervalWidth(yDomain) < yMaxSizeToShow.value;
+
+    if (isTooSmallToSubdivide) {
+      return [problemLineTrace];
+    }
+
+    // recursively get subproblem shapes
+    const subProblemTraces: Partial<Plotly.Data>[] = getSubProblems(step).flatMap(getProblemTraces);
 
     return [problemLineTrace, ...subProblemTraces];
   }
@@ -207,7 +223,7 @@
     }
   }
 
-  watch([plotDiv, () => props.topProblem, xVar, yVar, focusedProblem], renderPlot);
+  watch([plotDiv, steps, () => props.topProblem, xVar, yVar, focusedProblem], renderPlot);
 
   onMounted(renderPlot);
   onUnmounted(() => {

@@ -9,51 +9,73 @@ import AERN2.MP qualified as MP
 import AERN2.MP.Affine (MPAffine (..), MPAffineConfig (..))
 import BranchAndPrune.BranchAndPrune (Problem (..))
 import BranchAndPrune.BranchAndPrune qualified as BP
-import Control.Concurrent (MVar, modifyMVar, modifyMVar_, newMVar, takeMVar)
-import Control.Monad (forever)
+import Control.Concurrent (MVar, modifyMVar, modifyMVar_, newMVar, readMVar, forkIO)
+import Control.Monad (forever, when)
 import Control.Monad.IO.Unlift (MonadIO (liftIO))
 import Control.Monad.Logger (runStdoutLoggingT)
 import Data.Aeson qualified as A
 import Data.Map qualified as Map
 import Data.Text (Text)
 import Data.Text.Encoding qualified as T
+import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import GHC.Generics (Generic)
 import GHC.Records
-import LPPaver2.BranchAndPrune (LPPBPParams (..), LPPStep, getStepBoxes, getStepExprs, getStepForms, lppBranchAndPrune)
+import LPPaver2.BranchAndPrune (LPPBPParams (..), LPPStep, getStepBoxes, lppBranchAndPrune)
 import LPPaver2.ExampleProblems (LPPProblemWithParamSpec (..), exampleProblems, exampleProblemsList, substituteParams)
 import LPPaver2.Export ()
 import LPPaver2.RealConstraints (EvalArithmetic (..), ExprStore, FormStore)
 import LPPaver2.RealConstraints.Boxes (BoxStore)
 import MixedTypesNumPrelude (convert, convertExactly)
 import Network.WebSockets qualified as WS
-import ServerState (RunID (..), RunInfo (..), ServerState (..))
+import ServerState (RunID (..), ServerState (..))
 import ServerState qualified
 import Prelude
 
 main :: IO ()
 main = do
   putStrLn "Starting LPPaver2 server."
-  state <- newMVar ServerState.new
-  WS.runServer "127.0.0.1" 9160 $ application state
+  WS.runServer "127.0.0.1" 9160 application
 
-application :: MVar ServerState -> WS.ServerApp
-application stateMVar pending = do
+application :: WS.ServerApp
+application pending = do
   conn <- WS.acceptRequest pending
   putStrLn "Client connected."
   -- withPingThread conn 30 (return ()) (forever (requestResponse conn))
-  forever $ requestResponse stateMVar conn
+  stateMVar <- newMVar ServerState.new
+  stateChangeHandlersMVar <- newMVar ([] :: [ServerState -> ServerState -> IO ()])
+  forever $ requestResponse stateMVar stateChangeHandlersMVar conn
 
-requestResponse :: MVar ServerState -> WS.Connection -> IO ()
-requestResponse stateMVar conn = do
+requestResponse :: MVar ServerState -> MVar [ServerState -> ServerState -> IO ()] -> WS.Connection -> IO ()
+requestResponse stateMVar stateChangeHandlersMVar conn = do
   putStrLn "waiting for message from client..."
   msg <- WS.receiveData conn :: IO Text
-  -- putStrLn $ "Received message: " ++ T.unpack msg
-  -- TODO: fork ?
   request <- parseRequest msg
-  modifyMVar stateMVar $ \state -> do
-    newState <- handleRequest state request respond
-    return (newState, ())
+  state <- readMVar stateMVar
+  _ <-forkIO $
+    handleRequest
+      ( RequestHandlerInfo
+          { request,
+            stateOnRequest = state,
+            addStateChangeHandler,
+            modifyState,
+            respond
+          }
+      )
+  pure ()
   where
+    addStateChangeHandler :: (ServerState -> ServerState -> IO ()) -> IO ()
+    addStateChangeHandler handler = do
+      modifyMVar_ stateChangeHandlersMVar $ \handlers -> do
+        pure (handlers ++ [handler])
+    modifyState :: (ServerState -> (ServerState, t)) -> IO t
+    modifyState fn = do
+      modifyMVar stateMVar $ \oldState -> do
+        let (newState, result) = fn oldState
+        -- execute the handlers for the new state
+        handlers <- readMVar stateChangeHandlersMVar
+        mapM_ (\handler -> handler oldState newState) handlers
+        -- save the new state to stateMVar
+        pure (newState, result)
     respond :: Response -> IO ()
     respond response = do
       let responseJSON = A.encode response
@@ -75,13 +97,17 @@ data ExampleProblemsResponse = ExampleProblemsResponse
 
 instance IsRequestResponse GetExampleProblemsRequest where
   type ResponseType GetExampleProblemsRequest = ExampleProblemsResponse
-  handleRequest state _ respond = do
-    let problems = exampleProblemsList
-    let scopes = map (\(_, p) -> p.problem.scope) problems
-    let problemForms = map (\(_, p) -> p.problem.constraint) problems
-    let newState = ServerState.addBoxes scopes $ ServerState.addForms problemForms state
+  handleRequest RequestHandlerInfo {modifyState, respond} = do
+    putStrLn "handling GetExampleProblemsRequest"
+    newState <- modifyState $ \state ->
+      let newState = ServerState.addBoxes scopes $ ServerState.addForms problemForms state
+       in (newState, newState)
+    putStrLn "sending ExampleProblemsResponse"
     respond $ ExampleProblemsResponse {problems = problems, boxes = newState.boxes}
-    pure newState
+    where
+      problems = exampleProblemsList
+      scopes = map (\(_, p) -> p.problem.scope) problems
+      problemForms = map (\(_, p) -> p.problem.constraint) problems
 
 instance A.FromJSON GetExampleProblemsRequest where
   parseJSON = A.genericParseJSON aesonOptions
@@ -93,59 +119,34 @@ instance A.ToJSON ExampleProblemsResponse where
 --- Formula/expression nodes ---
 --------------------------------
 
-data GetAllFormulaNodesRequest = GetAllFormulaNodesRequest
+data KeepGettingFormulaNodesRequest = KeepGettingFormulaNodesRequest
   deriving (Generic, Show)
 
-data FormulaNodesResponse = FormulaNodesResponse
+data NewFormulaNodesResponse = NewFormulaNodesResponse
   { exprs :: ExprStore,
     forms :: FormStore
   }
   deriving (Generic)
 
-instance IsRequestResponse GetAllFormulaNodesRequest where
-  type ResponseType GetAllFormulaNodesRequest = FormulaNodesResponse
-  handleRequest state _ respond = do
-    respond $ FormulaNodesResponse {exprs = state.exprs, forms = state.forms}
-    pure state
+instance IsRequestResponse KeepGettingFormulaNodesRequest where
+  type ResponseType KeepGettingFormulaNodesRequest = NewFormulaNodesResponse
+  handleRequest RequestHandlerInfo {stateOnRequest = initState, respond, addStateChangeHandler} = do
+    -- Respond immediately with the initial state of formula nodes
+    respond $ NewFormulaNodesResponse {exprs = initState.exprs, forms = initState.forms}
+    -- Add a state change handler to respond with new formula nodes as they are added
+    addStateChangeHandler handler
+    where
+      handler oldState newState =
+        when (not (Map.null newExprs) || not (Map.null newForms)) $ do
+          respond $ NewFormulaNodesResponse {exprs = newExprs, forms = newForms}
+        where
+          newExprs = Map.difference newState.exprs oldState.exprs
+          newForms = Map.difference newState.forms oldState.forms
 
-instance A.FromJSON GetAllFormulaNodesRequest where
+instance A.FromJSON KeepGettingFormulaNodesRequest where
   parseJSON = A.genericParseJSON aesonOptions
 
-instance A.ToJSON FormulaNodesResponse where
-  toEncoding = A.genericToEncoding aesonOptions
-
---------------------------------
---- Steps ---
---------------------------------
-
-newtype GetStepsRequest = GetStepsRequest {runId :: RunID}
-  deriving (Generic, Show)
-
-data StepsResponse = StepsResponse
-  { runId :: RunID,
-    steps :: [LPPStep],
-    boxes :: BoxStore
-  }
-  deriving (Generic)
-
-instance IsRequestResponse GetStepsRequest where
-  type ResponseType GetStepsRequest = StepsResponse
-  handleRequest state request respond = do
-    let runId = request.runId
-    case Map.lookup runId state.runs of
-      Nothing -> do
-        putStrLn $ "No run found for runId: " ++ show runId
-        respond $ StepsResponse {runId = runId, steps = [], boxes = state.boxes}
-        pure state
-      Just runInfo -> do
-        putStrLn $ "Returning steps for runId: " ++ show runId
-        respond $ StepsResponse {runId = runId, steps = runInfo.runSteps, boxes = state.boxes}
-        pure state
-
-instance A.FromJSON GetStepsRequest where
-  parseJSON = A.genericParseJSON aesonOptions
-
-instance A.ToJSON StepsResponse where
+instance A.ToJSON NewFormulaNodesResponse where
   toEncoding = A.genericToEncoding aesonOptions
 
 ------------------------------------------------
@@ -185,45 +186,65 @@ data SolverRunStatus = SolverRunning | SolverFinished
 
 data SolverRunStatusUpdate = SolverRunStatusUpdate
   { runId :: RunID,
-    status :: SolverRunStatus
+    status :: SolverRunStatus,
+    newSteps :: [LPPStep],
+    newBoxes :: BoxStore
   }
-  deriving (Show, Generic)
+  deriving (Generic)
 
 instance IsRequestResponse RunSolverRequest where
   type ResponseType RunSolverRequest = SolverRunStatusUpdate
-  handleRequest state request respond = do
-    let runId = request.runId
-    respond (SolverRunStatusUpdate {runId, status = SolverRunning})
-    let params = mkParams request
-    stateMV <- liftIO $ newMVar state
-    _ <- runStdoutLoggingT $ do
-      lppBranchAndPrune (getEvalArithmetic request.arithmetic) (lppStepsController runId stateMV) params
-    respond (SolverRunStatusUpdate {runId, status = SolverFinished})
-    liftIO $ takeMVar stateMV
+  handleRequest RequestHandlerInfo {request, modifyState, respond} = do
+    -- report solver has started
+    respond $ SolverRunStatusUpdate {runId, status = SolverRunning, newSteps = [], newBoxes = Map.empty}
+    setLastSentTime runId modifyState -- mark the time of this initial update
 
-lppStepsController :: (MonadIO m) => RunID -> MVar ServerState -> BP.StepsController m LPPStep
-lppStepsController runId stateMV =
+    -- run the solver with our steps controller
+    _ <- runStdoutLoggingT $ do
+      lppBranchAndPrune
+        (getEvalArithmetic request.arithmetic)
+        (lppStepsController runId modifyState reportProgress) -- accummulates steps and boxes and reports them to the client
+        (mkParams request)
+    -- report any remaining new steps after the solver has finished
+    reportProgress
+    -- report solver has finished
+    respond $ SolverRunStatusUpdate {runId, status = SolverFinished, newSteps = [], newBoxes = Map.empty}
+    where
+      runId = request.runId
+      -- a helper to report new steps
+      reportProgress =
+        do
+          (newSteps, newBoxes) <- modifyState $ ServerState.processNewSteps runId
+          respond $ SolverRunStatusUpdate {runId, status = SolverRunning, newSteps, newBoxes}
+          setLastSentTime runId modifyState
+
+setLastSentTime :: RunID -> ModifyState () -> IO ()
+setLastSentTime runId modifyState = do
+  currentTime <- getCurrentTime
+  _ <- modifyState $ \state ->
+    let newState = ServerState.setLastSentTime runId currentTime state
+     in (newState, ())
+  pure ()
+
+lppStepsController :: (MonadIO m) => RunID -> ModifyState (Maybe UTCTime) -> IO () -> BP.StepsController m LPPStep
+lppStepsController runId modifyState reportProgress =
   BP.StepsController {reportStep}
   where
     reportStep step = liftIO $ do
-      modifyMVar_ stateMV (pure . addStepToState step)
-      putStrLn $ "Step for runId " ++ show runId ++ ": " ++ show step
-    -- This is the only place where stateMV is modified.
-    -- Thus all updates follow the take-put protocol, making the modifications atomic.
+      currentTime <- getCurrentTime
+      maybeLastSentTime <- modifyState $ \state ->
+        -- add the new step to the state
+        let updatedState = ServerState.addNewSteps runId [step] (getStepBoxes step) state
+            lastSentTime = (updatedState.runs Map.! runId).lastSentTime
+         in (updatedState, lastSentTime)
+      -- report progress to the client but no more than once every 0.5 seconds
+      case maybeLastSentTime of
+        Nothing -> do
+          return ()
+        Just lastSentTime -> do
+          when (diffUTCTime currentTime lastSentTime > 0.5) reportProgress
 
-    addStepToState :: LPPStep -> ServerState -> ServerState
-    addStepToState step state =
-      state
-        { -- Update the server state with the new boxes, expressions, and forms from the step
-          boxes = Map.union state.boxes (getStepBoxes step),
-          exprs = Map.union state.exprs (getStepExprs step),
-          forms = Map.union state.forms (getStepForms step),
-          runs = Map.alter updateRunInfo runId state.runs
-        }
-      where
-        updateRunInfo :: Maybe RunInfo -> Maybe RunInfo
-        updateRunInfo Nothing = Just $ RunInfo {runID = runId, runSteps = [step]}
-        updateRunInfo (Just runInfo) = Just $ runInfo {runSteps = runInfo.runSteps ++ [step]}
+-- putStrLn $ "Step for runId " ++ show runId ++ ": " ++ show step
 
 mkParams :: RunSolverRequest -> LPPBPParams
 mkParams request =
@@ -257,38 +278,60 @@ instance A.ToJSON SolverRunStatusUpdate where
 --- Request/Response boilerplate and parsing ---
 ------------------------------------------------
 
+type ModifyState t = (ServerState -> (ServerState, t)) -> IO t
+
+data RequestHandlerInfo request = RequestHandlerInfo
+  { request :: request,
+    stateOnRequest :: ServerState,
+    -- | Registers a handler that will be called whenever the server state changes.
+    -- | The handler receives the old state and the new state as arguments.
+    addStateChangeHandler :: (ServerState -> ServerState -> IO ()) -> IO (),
+    modifyState :: forall t. ModifyState t,
+    respond :: ResponseType request -> IO ()
+  }
+
 class IsRequestResponse request where
   type ResponseType request
   handleRequest ::
-    ServerState ->
-    request ->
-    (ResponseType request -> IO ()) ->
-    IO ServerState
+    RequestHandlerInfo request ->
+    IO ()
 
 data Request
   = RequestGetExampleProblems GetExampleProblemsRequest
-  | RequestGetAllFormulaNodes GetAllFormulaNodesRequest
+  | RequestKeepGettingFormulaNodes KeepGettingFormulaNodesRequest
   | RequestRunSolver RunSolverRequest
-  | RequestGetSteps GetStepsRequest
   deriving (Generic, Show)
 
 data Response
   = ResponseExampleProblems ExampleProblemsResponse
-  | ResponseFormulaNodes FormulaNodesResponse
+  | ResponseNewFormulaNodes NewFormulaNodesResponse
   | ResponseSolverRunStatusUpdate SolverRunStatusUpdate
-  | ResponseSteps StepsResponse
   deriving (Generic)
 
 instance IsRequestResponse Request where
   type ResponseType Request = Response
-  handleRequest state (RequestGetExampleProblems req) respond = do
-    handleRequest state req (respond . ResponseExampleProblems)
-  handleRequest state (RequestGetAllFormulaNodes req) respond = do
-    handleRequest state req (respond . ResponseFormulaNodes)
-  handleRequest state (RequestRunSolver req) respond = do
-    handleRequest state req (respond . ResponseSolverRunStatusUpdate)
-  handleRequest state (RequestGetSteps req) respond = do
-    handleRequest state req (respond . ResponseSteps)
+  handleRequest info = do
+    case info.request of
+      RequestGetExampleProblems req ->
+        handleRequest (delegatedRequestInfo req ResponseExampleProblems info)
+      RequestKeepGettingFormulaNodes req ->
+        handleRequest (delegatedRequestInfo req ResponseNewFormulaNodes info)
+      RequestRunSolver req ->
+        handleRequest (delegatedRequestInfo req ResponseSolverRunStatusUpdate info)
+
+delegatedRequestInfo ::
+  request2 ->
+  (ResponseType request2 -> ResponseType request1) ->
+  RequestHandlerInfo request1 ->
+  RequestHandlerInfo request2
+delegatedRequestInfo request2 response2to1 RequestHandlerInfo {..} =
+  RequestHandlerInfo
+    { request = request2,
+      stateOnRequest = stateOnRequest,
+      modifyState = modifyState,
+      addStateChangeHandler = addStateChangeHandler,
+      respond = respond . response2to1
+    }
 
 instance A.FromJSON Request where
   parseJSON = A.genericParseJSON aesonOptions

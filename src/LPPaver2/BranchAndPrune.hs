@@ -38,16 +38,11 @@ type LPPStep = BP.Step LPPProblem LPPPaving EvaluatedForm
 
 getStepBoxes :: LPPStep -> BoxStore
 getStepBoxes step =
-  scopesStore `Map.union` pavingBoxStore
+  Map.unions $ scopesStore : concat [[paving.inner.store, paving.outer.store] | paving <- pavings]
   where
-    scopesStore = boxListToStore $ problemsScopes <> pavingsScopes
-    boxListToStore :: [Box] -> BoxStore
-    boxListToStore boxes = Map.fromList [(box.boxHash, box) | box <- boxes]
-    problems = BP.getStepProblems step
-    problemsScopes = [p.scope | p <- problems]
     pavings = BP.getStepPavings step
-    pavingsScopes = [p.scope | p <- pavings]
-    pavingBoxStore = Map.unions [paving.inner.store `Map.union` paving.outer.store | paving <- pavings]
+    scopes = [p.scope | p <- BP.getStepProblems step] <> [p.scope | p <- pavings]
+    scopesStore = Map.fromList [(box.boxHash, box) | box <- scopes]
 
 getStepExprs :: LPPStep -> ExprStore
 getStepExprs step =
