@@ -85,6 +85,8 @@ data LPPBPParams = LPPBPParams
   { problem :: LPPProblem,
     maxThreads :: Int,
     giveUpAccuracy :: Rational,
+    -- | Checked by each solver thread before each step; returning Just aborts the whole B&P process.
+    shouldAbort :: BP.Paving Form Box Boxes -> Maybe String,
     shouldLog :: Bool
   }
 
@@ -119,7 +121,7 @@ lppBranchAndPrune evalArithmetic lppStepsController (LPPBPParams {..}) = do
     ( BP.Params
         { BP.problem,
           BP.pruningMethod = evalArithmetic,
-          BP.shouldAbort = const Nothing,
+          BP.shouldAbort = shouldAbort,
           BP.shouldGiveUpSolvingProblem = shouldGiveUpOnBPLPPProblem giveUpAccuracy :: LPPProblem -> Bool,
           BP.dummyPriorityQueue,
           BP.dummyEvalInfo = EvaluatedFormMPBall EvaluatedFormR {form = formTrue, exprValues = Map.empty, formValues = Map.empty},

@@ -11,14 +11,16 @@ import AERN2.MP.Affine (MPAffine (..), MPAffineConfig (..))
 import BranchAndPrune.BranchAndPrune (Problem (..))
 import BranchAndPrune.BranchAndPrune qualified as BP
 import Control.Concurrent (MVar, forkIO, killThread, modifyMVar, modifyMVar_, newEmptyMVar, newMVar, readMVar, takeMVar, threadDelay, tryPutMVar, withMVar)
-import Control.Exception (bracket, evaluate)
-import Control.Monad (forM, forever, void, when, unless)
+import Control.Exception (SomeException, evaluate, finally, throwIO, try)
+import Control.Monad (forM, forM_, forever, unless, void, when)
 import Control.Monad.IO.Unlift (MonadIO (liftIO))
 import Control.Monad.Logger (runStdoutLoggingT)
 import Data.Aeson qualified as A
 import Data.Map qualified as Map
+import Data.IORef (IORef, atomicWriteIORef, newIORef, readIORef)
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
+import Data.Text qualified as Text
 import Data.Text.Encoding qualified as T
 import GHC.Generics (Generic)
 import GHC.Records
@@ -31,6 +33,8 @@ import MixedTypesNumPrelude (convert, convertExactly)
 import Network.WebSockets qualified as WS
 import ServerState (RunID (..), ServerState (..))
 import ServerState qualified
+import System.IO.Unsafe (unsafePerformIO)
+import System.Timeout (timeout)
 import Prelude
 
 main :: IO ()
@@ -44,7 +48,16 @@ application pending = do
   putStrLn "Client connected."
   -- withPingThread conn 30 (return ()) (forever (requestResponse conn))
   connState <- newConnectionState conn
-  bracket (forkIO (publisher connState)) killThread $ \_ ->
+  publisherThread <- forkIO (publisher connState)
+  let onDisconnect = do
+        putStrLn "Client disconnected, cancelling any running solvers."
+        -- running solvers check this flag before each step and abort
+        atomicWriteIORef connState.connectionClosedRef True
+        -- stop the publisher; this also interrupts any send stuck because the client stopped reading
+        killThread publisherThread
+        -- now that the socket is free, try to complete the closing handshake, but do not wait for long
+        void $ try @SomeException $ timeout 1000000 $ WS.sendClose conn Text.empty
+  flip finally onDisconnect $
     forever $ requestResponse connState
 
 -- | Per-connection state shared by the request handlers, the solver threads and the publisher thread.
@@ -55,7 +68,9 @@ data ConnectionState = ConnectionState
     stateMVar :: MVar ServerState,
     -- | Signalled (non-blocking) whenever the state changes, consumed by the publisher.
     stateChangedMVar :: MVar (),
-    stateChangeHandlersMVar :: MVar [StateChangeHandler]
+    stateChangeHandlersMVar :: MVar [StateChangeHandler],
+    -- | Set when the connection is closed so that tasks such as running solvers can stop.
+    connectionClosedRef :: IORef Bool
   }
 
 newConnectionState :: WS.Connection -> IO ConnectionState
@@ -64,7 +79,8 @@ newConnectionState conn = do
   stateMVar <- newMVar ServerState.new
   stateChangedMVar <- newEmptyMVar
   stateChangeHandlersMVar <- newMVar []
-  pure ConnectionState {conn, sendLock, stateMVar, stateChangedMVar, stateChangeHandlersMVar}
+  connectionClosedRef <- newIORef False
+  pure ConnectionState {conn, sendLock, stateMVar, stateChangedMVar, stateChangeHandlersMVar, connectionClosedRef}
 
 -- | A registered state change handler together with the last state it has been shown.
 data StateChangeHandler = StateChangeHandler
@@ -93,10 +109,26 @@ publisher ConnectionState {stateChangedMVar, stateMVar, stateChangeHandlersMVar}
         RemoveHandler -> Nothing
   threadDelay publishIntervalMicroseconds
 
+-- | Like WS.receiveData but does not reply to a Close message before throwing CloseRequest.
+-- WS.receiveData sends the close reply first, which blocks if another thread is stuck sending
+-- to a client that stopped reading (eg a browser tab being reloaded), so the disconnect would go unnoticed.
+-- The close reply is sent later, in the disconnect handler of 'application'.
+receiveText :: WS.Connection -> IO Text
+receiveText conn = do
+  msg <- WS.receive conn
+  case msg of
+    WS.DataMessage _ _ _ dataMessage -> pure (WS.fromDataMessage dataMessage)
+    WS.ControlMessage (WS.Close code reason) -> throwIO (WS.CloseRequest code reason)
+    WS.ControlMessage (WS.Ping payload) -> do
+      -- reply in a separate thread so that a stuck send does not stop us from receiving
+      _ <- forkIO $ void $ try @SomeException $ WS.send conn (WS.ControlMessage (WS.Pong payload))
+      receiveText conn
+    WS.ControlMessage (WS.Pong _) -> receiveText conn
+
 requestResponse :: ConnectionState -> IO ()
-requestResponse ConnectionState {conn, sendLock, stateMVar, stateChangedMVar, stateChangeHandlersMVar} = do
+requestResponse ConnectionState {conn, sendLock, stateMVar, stateChangedMVar, stateChangeHandlersMVar, connectionClosedRef} = do
   putStrLn "waiting for message from client..."
-  msg <- WS.receiveData conn :: IO Text
+  msg <- receiveText conn
   request <- parseRequest msg
   state <- readMVar stateMVar
   _ <-
@@ -107,7 +139,8 @@ requestResponse ConnectionState {conn, sendLock, stateMVar, stateChangedMVar, st
               stateOnRequest = state,
               addStateChangeHandler,
               modifyState,
-              respond
+              respond,
+              isConnectionClosed = readIORef connectionClosedRef
             }
         )
   pure ()
@@ -247,7 +280,7 @@ data SolverRunStatusUpdate = SolverRunStatusUpdate
 
 instance IsRequestResponse RunSolverRequest where
   type ResponseType RunSolverRequest = SolverRunStatusUpdate
-  handleRequest RequestHandlerInfo {request, modifyState, respond, addStateChangeHandler} = do
+  handleRequest RequestHandlerInfo {request, modifyState, respond, addStateChangeHandler, isConnectionClosed} = do
     stateAtStart <- modifyState $ \state -> let newState = ServerState.startRun runId state in (newState, newState)
     -- report solver has started
     respond $ SolverRunStatusUpdate {runId, status = SolverRunning, newSteps = [], newBoxes = Map.empty}
@@ -255,13 +288,15 @@ instance IsRequestResponse RunSolverRequest where
     addStateChangeHandler stateAtStart progressHandler
 
     -- run the solver with our steps controller
-    _ <- runStdoutLoggingT $ do
-      lppBranchAndPrune
-        (getEvalArithmetic request.arithmetic)
-        (lppStepsController runId modifyState) -- accummulates steps and boxes in the server state
-        (mkParams request)
-    -- the publisher will report any remaining steps and then that the solver has finished
-    modifyState $ \state -> (ServerState.finishRun runId state, ())
+    -- whatever happens, mark the run as finished so that the publisher reports any remaining steps and then that the solver has finished
+    flip finally (modifyState $ \state -> (ServerState.finishRun runId state, ())) $ do
+      result <- runStdoutLoggingT $ do
+        lppBranchAndPrune
+          (getEvalArithmetic request.arithmetic)
+          (lppStepsController runId modifyState) -- accummulates steps and boxes in the server state
+          (mkParams request) {shouldAbort = abortWhen isConnectionClosed "client disconnected"}
+      forM_ result.aborted $ \reason ->
+        putStrLn $ "Solver run " ++ show runId ++ " aborted: " ++ reason
     where
       runId = request.runId
       progressHandler oldState newState = do
@@ -284,12 +319,27 @@ lppStepsController runId modifyState =
     reportStep step = liftIO $ do
       modifyState $ \state -> (ServerState.addNewSteps runId [step] (getStepBoxes step) state, ())
 
+-- | Turn an IO condition into a B&P shouldAbort function.
+-- The B&P engine requires a pure function, so we read the condition with unsafePerformIO.
+-- This is safe because reading a flag has no side effects and a stale value only delays the abort by a step.
+-- NOINLINE and the dependency on the paving argument ensure the condition is re-read on every call
+-- instead of being floated out and evaluated only once.
+{-# NOINLINE abortWhen #-}
+abortWhen :: IO Bool -> String -> paving -> Maybe String
+abortWhen condition reason paving =
+  unsafePerformIO $ do
+    shouldAbort <- paving `seq` condition
+    pure $ case shouldAbort of
+      True -> Just reason
+      False -> Nothing
+
 mkParams :: RunSolverRequest -> LPPBPParams
 mkParams request =
   LPPBPParams
     { problem = problemWithSubstitutedParams,
       maxThreads = request.numberOfThreads,
       giveUpAccuracy = convert request.giveUpAccuracy,
+      shouldAbort = const Nothing,
       shouldLog = False
     }
   where
@@ -329,7 +379,9 @@ data RequestHandlerInfo request = RequestHandlerInfo
     -- | and changes may be coalesced, ie the handler may not see every intermediate state.
     addStateChangeHandler :: ServerState -> (ServerState -> ServerState -> IO HandlerContinuation) -> IO (),
     modifyState :: forall t. ModifyState t,
-    respond :: ResponseType request -> IO ()
+    respond :: ResponseType request -> IO (),
+    -- | Whether the client connection has closed, ie long-running tasks should stop.
+    isConnectionClosed :: IO Bool
   }
 
 class IsRequestResponse request where
@@ -373,14 +425,16 @@ delegatedRequestInfo
     { stateOnRequest,
       modifyState,
       addStateChangeHandler,
-      respond
+      respond,
+      isConnectionClosed
     } =
     RequestHandlerInfo
       { request = request2,
         stateOnRequest = stateOnRequest,
         modifyState = modifyState,
         addStateChangeHandler = addStateChangeHandler,
-        respond = respond . response2to1
+        respond = respond . response2to1,
+        isConnectionClosed = isConnectionClosed
       }
 
 instance A.FromJSON Request where
