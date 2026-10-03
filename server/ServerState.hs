@@ -6,8 +6,10 @@ module ServerState
     addBoxes,
     addForms,
     addNewSteps,
-    setLastSentTime,
-    processNewSteps,
+    startRun,
+    finishRun,
+    getNewRunSteps,
+    isRunFinished,
   )
 where
 
@@ -17,7 +19,6 @@ import Data.List qualified as List
 import Data.Map qualified as Map
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
-import Data.Time.Clock (UTCTime)
 import GHC.Generics (Generic)
 import GHC.Records
 import BranchAndPrune.BranchAndPrune qualified as BP
@@ -45,10 +46,8 @@ instance A.ToJSON RunID where
 
 data RunInfo = RunInfo
   { runID :: !RunID,
-    steps :: !(Seq LPPStep),
-    newSteps :: !(Seq LPPStep),
-    newBoxes :: !BoxStore,
-    lastSentTime :: !(Maybe UTCTime) -- the time of the last update sent to the client for this run
+    steps :: !(Seq LPPStep), -- all steps reported so far, in order
+    finished :: !Bool
   }
 
 new :: ServerState
@@ -76,60 +75,35 @@ addForms newForms state =
     newExprNodes = List.map (\f -> f.nodesE) newForms
     newFormNodes = List.map (\f -> f.nodesF) newForms
 
+-- | Record new steps for a run, together with their boxes and formula nodes.
+-- This is called by the solver threads for every step, so it needs to be cheap.
 addNewSteps :: RunID -> [LPPStep] -> BoxStore -> ServerState -> ServerState
 addNewSteps runId newSteps newBoxes state =
   addForms newForms $
-  addBoxes (Map.elems newBoxes) $
-  state {runs = Map.insert runId updatedRunInfo state.runs}
+    addBoxes (Map.elems newBoxes) $
+      state {runs = Map.alter (Just . addSteps) runId state.runs}
   where
     newForms = List.map (.constraint) $ List.concatMap BP.getStepProblems newSteps
-    updatedRunInfo =
-      case Map.lookup runId state.runs of
-        Nothing ->
-          RunInfo
-            { runID = runId,
-              steps = Seq.empty,
-              newSteps = Seq.fromList newSteps,
-              newBoxes = newBoxes,
-              lastSentTime = Nothing
-            }
-        Just runInfo ->
-          runInfo
-            { newSteps = runInfo.newSteps <> Seq.fromList newSteps,
-              newBoxes = runInfo.newBoxes `Map.union` newBoxes
-            }
+    addSteps Nothing = RunInfo {runID = runId, steps = Seq.fromList newSteps, finished = False}
+    addSteps (Just runInfo) = runInfo {steps = runInfo.steps <> Seq.fromList newSteps}
 
-setLastSentTime :: RunID -> UTCTime -> ServerState -> ServerState
-setLastSentTime runId time state =
-  state {runs = Map.insert runId updatedRunInfo state.runs}
+startRun :: RunID -> ServerState -> ServerState
+startRun runId state =
+  state {runs = Map.insert runId RunInfo {runID = runId, steps = Seq.empty, finished = False} state.runs}
+
+finishRun :: RunID -> ServerState -> ServerState
+finishRun runId state =
+  state {runs = Map.adjust (\runInfo -> runInfo {finished = True}) runId state.runs}
+
+-- | The steps of the run that are in the new state but not in the old state.
+-- Cheap, because steps are only ever appended.
+getNewRunSteps :: RunID -> ServerState -> ServerState -> [LPPStep]
+getNewRunSteps runId oldState newState =
+  case Map.lookup runId newState.runs of
+    Nothing -> []
+    Just newRunInfo -> toList $ Seq.drop oldCount newRunInfo.steps
   where
-    updatedRunInfo =
-      case Map.lookup runId state.runs of
-        Nothing ->
-          RunInfo
-            { runID = runId,
-              steps = Seq.empty,
-              newSteps = Seq.empty,
-              newBoxes = Map.empty,
-              lastSentTime = Just time
-            }
-        Just runInfo ->
-          runInfo {lastSentTime = Just time}
+    oldCount = maybe 0 (Seq.length . (.steps)) (Map.lookup runId oldState.runs)
 
-processNewSteps :: RunID -> ServerState -> (ServerState, ([LPPStep], BoxStore))
-processNewSteps runId state =
-  case Map.lookup runId state.runs of
-    Nothing -> (state, ([], Map.empty))
-    Just runInfo ->
-      -- shift the newSteps to steps and clear newSteps, update lastSentTime
-      let steps = runInfo.steps <> runInfo.newSteps
-          updatedRunInfo =
-            RunInfo
-              { runID = runInfo.runID,
-                steps = steps,
-                newSteps = Seq.empty,
-                newBoxes = Map.empty,
-                lastSentTime = Nothing -- this is set later, after sending the update to the client
-              }
-          updatedState = state {runs = Map.insert runId updatedRunInfo state.runs}
-       in (updatedState, (toList runInfo.newSteps, runInfo.newBoxes)) -- also return the shifted newSteps and newBoxes
+isRunFinished :: RunID -> ServerState -> Bool
+isRunFinished runId state = maybe False (.finished) (Map.lookup runId state.runs)

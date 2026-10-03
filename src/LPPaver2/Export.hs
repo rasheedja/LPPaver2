@@ -89,7 +89,7 @@ instance A.ToJSONKey ExprHash where
   toJSONKey = A.toJSONKeyText (intToText . \(ExprHash h) -> h)
 
 instance A.ToJSON Expr where
-  toJSON (Expr {..}) =
+  toJSON (Expr {root}) =
     A.object ["exprH" .= root]
 
 instance A.ToJSON BinaryComp where
@@ -111,7 +111,7 @@ instance A.ToJSONKey FormHash where
   toJSONKey = A.toJSONKeyText (intToText . \(FormHash h) -> h)
 
 instance A.ToJSON Form where
-  toJSON (Form {..}) =
+  toJSON (Form {root}) =
     A.object ["formH" .= root]
 
 instance A.ToJSON EvaluatedForm where

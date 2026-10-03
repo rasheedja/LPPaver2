@@ -202,7 +202,7 @@ instance BP.IsPriorityQueue BoxStack LPPProblem where
   queueMerge (BoxStack stackL) (BoxStack stackR) = BoxStack $ stackL ++ stackR
 
 instance BP.ShowStats (BP.Subset Boxes Box) where
-  showStats (BP.Subset {..}) =
+  showStats (BP.Subset {subset, superset}) =
     printf "{|boxes| = %d, coverage = %3.4f%%}" (boxesCount subset) coveragePercent
     where
       coveragePercent = 100 * (boxesAreaD subset / boxAreaD superset)

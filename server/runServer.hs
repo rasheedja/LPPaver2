@@ -2,6 +2,7 @@
 {-# HLINT ignore "Use >" #-}
 {-# OPTIONS_GHC -Wno-partial-fields #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Use if" #-}
 
 module Main (main) where
 
@@ -9,16 +10,16 @@ import AERN2.MP qualified as MP
 import AERN2.MP.Affine (MPAffine (..), MPAffineConfig (..))
 import BranchAndPrune.BranchAndPrune (Problem (..))
 import BranchAndPrune.BranchAndPrune qualified as BP
-import Control.Concurrent (MVar, forkIO, modifyMVar, modifyMVar_, newMVar, readMVar)
-import Control.Exception (evaluate)
-import Control.Monad (forever, when)
+import Control.Concurrent (MVar, forkIO, killThread, modifyMVar, modifyMVar_, newEmptyMVar, newMVar, readMVar, takeMVar, threadDelay, tryPutMVar, withMVar)
+import Control.Exception (bracket, evaluate)
+import Control.Monad (forM, forever, void, when, unless)
 import Control.Monad.IO.Unlift (MonadIO (liftIO))
 import Control.Monad.Logger (runStdoutLoggingT)
 import Data.Aeson qualified as A
 import Data.Map qualified as Map
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as T
-import Data.Time.Clock (UTCTime, diffUTCTime, getCurrentTime)
 import GHC.Generics (Generic)
 import GHC.Records
 import LPPaver2.BranchAndPrune (LPPBPParams (..), LPPStep, getStepBoxes, lppBranchAndPrune)
@@ -42,48 +43,96 @@ application pending = do
   conn <- WS.acceptRequest pending
   putStrLn "Client connected."
   -- withPingThread conn 30 (return ()) (forever (requestResponse conn))
-  stateMVar <- newMVar ServerState.new
-  stateChangeHandlersMVar <- newMVar ([] :: [ServerState -> ServerState -> IO ()])
-  forever $ requestResponse stateMVar stateChangeHandlersMVar conn
+  connState <- newConnectionState conn
+  bracket (forkIO (publisher connState)) killThread $ \_ ->
+    forever $ requestResponse connState
 
-requestResponse :: MVar ServerState -> MVar [ServerState -> ServerState -> IO ()] -> WS.Connection -> IO ()
-requestResponse stateMVar stateChangeHandlersMVar conn = do
+-- | Per-connection state shared by the request handlers, the solver threads and the publisher thread.
+data ConnectionState = ConnectionState
+  { conn :: WS.Connection,
+    -- | Serialises all writes to the socket.
+    sendLock :: MVar (),
+    stateMVar :: MVar ServerState,
+    -- | Signalled (non-blocking) whenever the state changes, consumed by the publisher.
+    stateChangedMVar :: MVar (),
+    stateChangeHandlersMVar :: MVar [StateChangeHandler]
+  }
+
+newConnectionState :: WS.Connection -> IO ConnectionState
+newConnectionState conn = do
+  sendLock <- newMVar ()
+  stateMVar <- newMVar ServerState.new
+  stateChangedMVar <- newEmptyMVar
+  stateChangeHandlersMVar <- newMVar []
+  pure ConnectionState {conn, sendLock, stateMVar, stateChangedMVar, stateChangeHandlersMVar}
+
+-- | A registered state change handler together with the last state it has been shown.
+data StateChangeHandler = StateChangeHandler
+  { lastSeenState :: ServerState,
+    onStateChange :: ServerState -> ServerState -> IO HandlerContinuation
+  }
+
+data HandlerContinuation = KeepHandler | RemoveHandler
+
+-- | Minimum time between two rounds of state change notifications.
+-- Changes made in the meantime are coalesced into the next round.
+publishIntervalMicroseconds :: Int
+publishIntervalMicroseconds = 500000
+
+-- | Runs the state change handlers outside the state lock, so that slow handlers
+-- (eg sending to a slow client) never block the threads that modify the state (eg the solver).
+publisher :: ConnectionState -> IO ()
+publisher ConnectionState {stateChangedMVar, stateMVar, stateChangeHandlersMVar} = forever $ do
+  takeMVar stateChangedMVar -- wait for a change
+  newState <- readMVar stateMVar
+  modifyMVar_ stateChangeHandlersMVar $ \handlers ->
+    fmap catMaybes $ forM handlers $ \handler -> do
+      continuation <- handler.onStateChange handler.lastSeenState newState
+      pure $ case continuation of
+        KeepHandler -> Just handler {lastSeenState = newState}
+        RemoveHandler -> Nothing
+  threadDelay publishIntervalMicroseconds
+
+requestResponse :: ConnectionState -> IO ()
+requestResponse ConnectionState {conn, sendLock, stateMVar, stateChangedMVar, stateChangeHandlersMVar} = do
   putStrLn "waiting for message from client..."
   msg <- WS.receiveData conn :: IO Text
   request <- parseRequest msg
   state <- readMVar stateMVar
-  _ <-forkIO $
-    handleRequest
-      ( RequestHandlerInfo
-          { request,
-            stateOnRequest = state,
-            addStateChangeHandler,
-            modifyState,
-            respond
-          }
-      )
+  _ <-
+    forkIO $
+      handleRequest
+        ( RequestHandlerInfo
+            { request,
+              stateOnRequest = state,
+              addStateChangeHandler,
+              modifyState,
+              respond
+            }
+        )
   pure ()
   where
-    addStateChangeHandler :: (ServerState -> ServerState -> IO ()) -> IO ()
-    addStateChangeHandler handler = do
+    addStateChangeHandler :: ServerState -> (ServerState -> ServerState -> IO HandlerContinuation) -> IO ()
+    addStateChangeHandler lastSeenState onStateChange = do
       modifyMVar_ stateChangeHandlersMVar $ \handlers -> do
-        pure (handlers ++ [handler])
+        pure (handlers ++ [StateChangeHandler {lastSeenState, onStateChange}])
+      -- make sure the publisher looks at the new handler even if the state does not change again
+      void $ tryPutMVar stateChangedMVar ()
     modifyState :: (ServerState -> (ServerState, t)) -> IO t
     modifyState fn = do
-      modifyMVar stateMVar $ \oldState -> do
+      result <- modifyMVar stateMVar $ \oldState -> do
         let (newStateLazy, result) = fn oldState
         -- force the new state (strict fields => map spines) so that no thunks accumulate in stateMVar
         newState <- evaluate newStateLazy
-        -- execute the handlers for the new state
-        handlers <- readMVar stateChangeHandlersMVar
-        mapM_ (\handler -> handler oldState newState) handlers
-        -- save the new state to stateMVar
         pure (newState, result)
+      -- notify the publisher without blocking
+      void $ tryPutMVar stateChangedMVar ()
+      pure result
     respond :: Response -> IO ()
     respond response = do
       let responseJSON = A.encode response
       -- putStrLn $ "Sending response: " ++ TL.unpack (TL.decodeUtf8 responseJSON)
-      WS.sendTextData conn responseJSON
+      withMVar sendLock $ \_ -> WS.sendTextData conn responseJSON
 
 ------------------------
 --- Example problems ---
@@ -137,11 +186,12 @@ instance IsRequestResponse KeepGettingFormulaNodesRequest where
     -- Respond immediately with the initial state of formula nodes
     respond $ NewFormulaNodesResponse {exprs = initState.exprs, forms = initState.forms}
     -- Add a state change handler to respond with new formula nodes as they are added
-    addStateChangeHandler handler
+    addStateChangeHandler initState handler
     where
-      handler oldState newState =
+      handler oldState newState = do
         when (not (Map.null newExprs) || not (Map.null newForms)) $ do
           respond $ NewFormulaNodesResponse {exprs = newExprs, forms = newForms}
+        pure KeepHandler
         where
           newExprs = Map.difference newState.exprs oldState.exprs
           newForms = Map.difference newState.forms oldState.forms
@@ -197,57 +247,42 @@ data SolverRunStatusUpdate = SolverRunStatusUpdate
 
 instance IsRequestResponse RunSolverRequest where
   type ResponseType RunSolverRequest = SolverRunStatusUpdate
-  handleRequest RequestHandlerInfo {request, modifyState, respond} = do
+  handleRequest RequestHandlerInfo {request, modifyState, respond, addStateChangeHandler} = do
+    stateAtStart <- modifyState $ \state -> let newState = ServerState.startRun runId state in (newState, newState)
     -- report solver has started
     respond $ SolverRunStatusUpdate {runId, status = SolverRunning, newSteps = [], newBoxes = Map.empty}
-    setLastSentTime runId modifyState -- mark the time of this initial update
+    -- the publisher thread will report progress, coalescing steps reported in quick succession
+    addStateChangeHandler stateAtStart progressHandler
 
     -- run the solver with our steps controller
     _ <- runStdoutLoggingT $ do
       lppBranchAndPrune
         (getEvalArithmetic request.arithmetic)
-        (lppStepsController runId modifyState reportProgress) -- accummulates steps and boxes and reports them to the client
+        (lppStepsController runId modifyState) -- accummulates steps and boxes in the server state
         (mkParams request)
-    -- report any remaining new steps after the solver has finished
-    reportProgress
-    -- report solver has finished
-    respond $ SolverRunStatusUpdate {runId, status = SolverFinished, newSteps = [], newBoxes = Map.empty}
+    -- the publisher will report any remaining steps and then that the solver has finished
+    modifyState $ \state -> (ServerState.finishRun runId state, ())
     where
       runId = request.runId
-      -- a helper to report new steps
-      reportProgress =
-        do
-          (newSteps, newBoxes) <- modifyState $ ServerState.processNewSteps runId
-          respond $ SolverRunStatusUpdate {runId, status = SolverRunning, newSteps, newBoxes}
-          setLastSentTime runId modifyState
+      progressHandler oldState newState = do
+        let newSteps = ServerState.getNewRunSteps runId oldState newState
+            newBoxes = Map.unions (map getStepBoxes newSteps)
+        unless (null newSteps) $
+          respond $
+            SolverRunStatusUpdate {runId, status = SolverRunning, newSteps, newBoxes}
+        case ServerState.isRunFinished runId newState of
+          True -> do
+            respond $ SolverRunStatusUpdate {runId, status = SolverFinished, newSteps = [], newBoxes = Map.empty}
+            pure RemoveHandler
+          False -> pure KeepHandler
 
-setLastSentTime :: RunID -> ModifyState () -> IO ()
-setLastSentTime runId modifyState = do
-  currentTime <- getCurrentTime
-  _ <- modifyState $ \state ->
-    let newState = ServerState.setLastSentTime runId currentTime state
-     in (newState, ())
-  pure ()
-
-lppStepsController :: (MonadIO m) => RunID -> ModifyState (Maybe UTCTime) -> IO () -> BP.StepsController m LPPStep
-lppStepsController runId modifyState reportProgress =
+lppStepsController :: (MonadIO m) => RunID -> ModifyState () -> BP.StepsController m LPPStep
+lppStepsController runId modifyState =
   BP.StepsController {reportStep}
   where
+    -- only record the step; sending it to the client is done by the publisher thread
     reportStep step = liftIO $ do
-      currentTime <- getCurrentTime
-      maybeLastSentTime <- modifyState $ \state ->
-        -- add the new step to the state
-        let updatedState = ServerState.addNewSteps runId [step] (getStepBoxes step) state
-            lastSentTime = (updatedState.runs Map.! runId).lastSentTime
-         in (updatedState, lastSentTime)
-      -- report progress to the client but no more than once every 0.5 seconds
-      case maybeLastSentTime of
-        Nothing -> do
-          return ()
-        Just lastSentTime -> do
-          when (diffUTCTime currentTime lastSentTime > 0.5) reportProgress
-
--- putStrLn $ "Step for runId " ++ show runId ++ ": " ++ show step
+      modifyState $ \state -> (ServerState.addNewSteps runId [step] (getStepBoxes step) state, ())
 
 mkParams :: RunSolverRequest -> LPPBPParams
 mkParams request =
@@ -288,7 +323,11 @@ data RequestHandlerInfo request = RequestHandlerInfo
     stateOnRequest :: ServerState,
     -- | Registers a handler that will be called whenever the server state changes.
     -- | The handler receives the old state and the new state as arguments.
-    addStateChangeHandler :: (ServerState -> ServerState -> IO ()) -> IO (),
+    -- | The first argument is the state from which the handler should start computing changes,
+    -- | typically stateOnRequest or a state obtained from modifyState.
+    -- | Handlers are run by the publisher thread, not by the thread that modifies the state,
+    -- | and changes may be coalesced, ie the handler may not see every intermediate state.
+    addStateChangeHandler :: ServerState -> (ServerState -> ServerState -> IO HandlerContinuation) -> IO (),
     modifyState :: forall t. ModifyState t,
     respond :: ResponseType request -> IO ()
   }
@@ -327,14 +366,22 @@ delegatedRequestInfo ::
   (ResponseType request2 -> ResponseType request1) ->
   RequestHandlerInfo request1 ->
   RequestHandlerInfo request2
-delegatedRequestInfo request2 response2to1 RequestHandlerInfo {..} =
+delegatedRequestInfo
+  request2
+  response2to1
   RequestHandlerInfo
-    { request = request2,
-      stateOnRequest = stateOnRequest,
-      modifyState = modifyState,
-      addStateChangeHandler = addStateChangeHandler,
-      respond = respond . response2to1
-    }
+    { stateOnRequest,
+      modifyState,
+      addStateChangeHandler,
+      respond
+    } =
+    RequestHandlerInfo
+      { request = request2,
+        stateOnRequest = stateOnRequest,
+        modifyState = modifyState,
+        addStateChangeHandler = addStateChangeHandler,
+        respond = respond . response2to1
+      }
 
 instance A.FromJSON Request where
   parseJSON = A.genericParseJSON aesonOptions
