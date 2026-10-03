@@ -73,6 +73,12 @@ library
 executable lppaver2-server
   main-is: runServer.hs
   other-modules:
+      Connection
+      RequestHandler
+      Requests
+      Requests.ExampleProblems
+      Requests.FormulaNodes
+      Requests.RunSolver
       ServerState
       Paths_LPPaver2
   autogen-modules:
