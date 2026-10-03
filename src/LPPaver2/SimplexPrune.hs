@@ -1,6 +1,5 @@
 module LPPaver2.SimplexPrune
   ( simplexPrune,
-    simplexPruneWithEvalValues,
     CanProvideSimplexRelaxations (..),
   )
 where
@@ -247,14 +246,6 @@ boxToVarDomains varToInt box =
           let lo = rational l,
           let hi = rational u
       ]
-
-simplexPruneWithEvalValues ::
-  (MonadIO m, CanProvideSimplexRelaxations r) =>
-  Box ->
-  Form ->
-  Map.Map ExprHash r ->
-  m (Maybe LinearPruneResult)
-simplexPruneWithEvalValues = simplexPrune
 
 -- | Use the simplex method to tighten a box given linear constraints.
 -- For each variable, maximize and minimize subject to all constraints.
