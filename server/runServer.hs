@@ -14,7 +14,9 @@ import Control.Monad (forever)
 import Control.Monad.IO.Unlift (MonadIO (liftIO))
 import Control.Monad.Logger (runStdoutLoggingT)
 import Data.Aeson qualified as A
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map qualified as Map
+import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as T
 import GHC.Generics (Generic)
@@ -247,7 +249,10 @@ mkParams request =
       Nothing -> error $ "Problem not found: " ++ request.problemName
 
 instance A.FromJSON RunSolverRequest where
-  parseJSON = A.genericParseJSON aesonOptions
+  parseJSON = A.withObject "RunSolverRequest" $ \request ->
+    -- Older clients omit useSimplex; preserve validation of any supplied value.
+    A.genericParseJSON aesonOptions $ A.Object $
+      KeyMap.insertWith (\_ existing -> existing) (fromString "useSimplex") (A.Bool False) request
 
 instance A.FromJSON Arithmetic where
   parseJSON = A.genericParseJSON aesonOptions

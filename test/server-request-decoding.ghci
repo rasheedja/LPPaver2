@@ -1,0 +1,48 @@
+-- Run from the repository root after `stack build`:
+-- stack ghci LPPaver2:exe:lppaver2-server --no-build --ghci-options='-ignore-dot-ghci -ghci-script test/server-request-decoding.ghci -e runRequestDecoderTests'
+-- Evaluating with -e propagates exitFailure; interactive GHCi catches it.
+
+:module + Data.ByteString.Char8 Data.Either Test.Hspec Test.Hspec.Runner System.Exit
+:{
+let payload :: String -> String
+    payload field = "{\"runId\":\"review\",\"problemName\":\"circleEps\",\"paramValues\":{},\"arithmetic\":{\"tag\":\"BallArithmetic\",\"precision\":100},\"giveUpAccuracy\":0.01,\"numberOfThreads\":1" ++ field ++ "}"
+    decodeFlag :: String -> Either String Bool
+    decodeFlag field = fmap (\RunSolverRequest {useSimplex = flag} -> flag) (A.eitherDecodeStrict (Data.ByteString.Char8.pack (payload field)))
+    decodeWrappedFlag :: String -> Either String Bool
+    decodeWrappedFlag field = do
+      request <- A.eitherDecodeStrict (Data.ByteString.Char8.pack ("{\"tag\":\"RequestRunSolver\",\"contents\":" ++ payload field ++ "}"))
+      case request of
+        RequestRunSolver RunSolverRequest {useSimplex = flag} -> Right flag
+        _ -> Left "Unexpected request constructor"
+:}
+:{
+let runRequestDecoderTests :: IO ()
+    runRequestDecoderTests = do
+      result <- hspecWithResult defaultConfig $
+        describe "RunSolverRequest actual server decoder" $ do
+          it "defaults missing useSimplex to false" $
+            decodeFlag "" `shouldBe` Right False
+          it "preserves explicit false" $
+            decodeFlag ",\"useSimplex\":false" `shouldBe` Right False
+          it "preserves explicit true" $
+            decodeFlag ",\"useSimplex\":true" `shouldBe` Right True
+          it "rejects null" $
+            decodeFlag ",\"useSimplex\":null" `shouldSatisfy` isLeft
+          it "rejects a string" $
+            decodeFlag ",\"useSimplex\":\"true\"" `shouldSatisfy` isLeft
+          it "rejects a number" $
+            decodeFlag ",\"useSimplex\":1" `shouldSatisfy` isLeft
+          it "rejects an array" $
+            decodeFlag ",\"useSimplex\":[]" `shouldSatisfy` isLeft
+          it "rejects an object" $
+            decodeFlag ",\"useSimplex\":{}" `shouldSatisfy` isLeft
+          it "defaults missing flag through the request wrapper" $
+            decodeWrappedFlag "" `shouldBe` Right False
+          it "preserves explicit true through the request wrapper" $
+            decodeWrappedFlag ",\"useSimplex\":true" `shouldBe` Right True
+          it "still rejects missing required fields" $
+            (A.eitherDecodeStrict (Data.ByteString.Char8.pack "{}") :: Either String RunSolverRequest) `shouldSatisfy` isLeft
+      case summaryFailures result of
+        0 -> pure ()
+        _ -> System.Exit.exitFailure
+:}
