@@ -9,7 +9,8 @@ import AERN2.MP qualified as MP
 import AERN2.MP.Affine (MPAffine (..), MPAffineConfig (..))
 import BranchAndPrune.BranchAndPrune (Problem (..))
 import BranchAndPrune.BranchAndPrune qualified as BP
-import Control.Concurrent (MVar, modifyMVar, modifyMVar_, newMVar, readMVar, forkIO)
+import Control.Concurrent (MVar, forkIO, modifyMVar, modifyMVar_, newMVar, readMVar)
+import Control.Exception (evaluate)
 import Control.Monad (forever, when)
 import Control.Monad.IO.Unlift (MonadIO (liftIO))
 import Control.Monad.Logger (runStdoutLoggingT)
@@ -70,7 +71,9 @@ requestResponse stateMVar stateChangeHandlersMVar conn = do
     modifyState :: (ServerState -> (ServerState, t)) -> IO t
     modifyState fn = do
       modifyMVar stateMVar $ \oldState -> do
-        let (newState, result) = fn oldState
+        let (newStateLazy, result) = fn oldState
+        -- force the new state (strict fields => map spines) so that no thunks accumulate in stateMVar
+        newState <- evaluate newStateLazy
         -- execute the handlers for the new state
         handlers <- readMVar stateChangeHandlersMVar
         mapM_ (\handler -> handler oldState newState) handlers
