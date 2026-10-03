@@ -47,6 +47,7 @@
   });
 
   const giveUpAccuracy = ref<number>(0.01);
+  const numberOfThreads = ref<number>(1);
 
   type ParamValue = {
     spec: DeepReadonly<ParamSpec>;
@@ -71,6 +72,7 @@
       paramsObj,
       selectedArithmetic.value,
       giveUpAccuracy.value,
+      numberOfThreads.value,
     );
   }
 
@@ -130,6 +132,17 @@
       id="giveUpAccuracy"
       v-model.number="giveUpAccuracy"
       step="0.01"
+    />
+    <!-- Input number of solver threads -->
+    <label for="numberOfThreads" class="form-label">Threads: </label>
+    <input
+      type="number"
+      class="form-control w-auto"
+      id="numberOfThreads"
+      v-model.number="numberOfThreads"
+      min="1"
+      max="64"
+      step="1"
     />
     <!-- run button -->
     <button :disabled="!canStartRun" class="btn btn-primary" @click="run">Run</button>
