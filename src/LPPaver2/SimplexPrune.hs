@@ -245,7 +245,7 @@ boxToVarDomains varToInt box =
       ]
 
 -- | Use the simplex method to tighten a box given linear constraints.
--- For each variable, maximize and minimize subject to all constraints.
+-- For each constrained volume variable, maximize and minimize subject to all constraints.
 -- Returns a tighter box if any improvement is found.
 simplexPrune ::
   (MonadIO m, CanProvideSimplexRelaxations r) =>
@@ -265,12 +265,15 @@ simplexPrune scope simplifiedForm exprValues = do
       if P.null constraints
         then pure Nothing
         else do
-          -- For each variable, minimize and maximize
-          let vars = Map.toList varToInt
+          -- Variables absent from the extracted constraints can only retain
+          -- their existing domain bounds, so they need no optimization.
+          let -- Constraint extraction has already removed zero coefficients.
+              constrainedVars = Set.unions [Map.keysSet constraint.lhs | constraint <- constraints]
+              vars = Map.toList varToInt
               objectives =
                 P.concatMap
                   ( \(var, intVar) ->
-                      if var `Set.member` scope.box_.volumeVars
+                      if var `Set.member` scope.box_.volumeVars P.&& intVar `Set.member` constrainedVars
                         then
                           [ ST.Min {objective = Map.singleton intVar (rational 1)},
                             ST.Max {objective = Map.singleton intVar (rational 1)}
