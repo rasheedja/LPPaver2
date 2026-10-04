@@ -188,13 +188,10 @@ relaxationToSimplexConstraint varToInt relaxation =
               let lhsMap =
                     Map.fromList
                       [ (intVar, coeff)
-                        | (var, coeff) <- Map.toList relaxation.coefficients,
-                          coeff /= 0,
+                        | (var, coeff) <- activeVars,
                           Just intVar <- [Map.lookup var varToInt]
                       ]
-               in if Map.null lhsMap
-                    then Constraints []
-                    else Constraints [ST.LEQ {lhs = lhsMap, rhs = relaxation.rhs}]
+               in Constraints [ST.LEQ {lhs = lhsMap, rhs = relaxation.rhs}]
 
 -- | Extract simplex constraints from a conjunction of inequalities.
 extractSimplexConstraints ::
