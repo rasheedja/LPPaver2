@@ -52,15 +52,15 @@ extra-deps:
 - row-types-1.0.1.2
 - mixed-types-num-0.6.2
 - aern2-mp-0.2.16.1
-- github: rasheedja/aern2
-  commit: '1cd93a8158c5c5ad3b808089079f9a2861ad3fcb'
+- github: michalkonecny/aern2
+  commit: '08fd51c2168358831a220471d9b2ed1670e31d1d'
   subdirs:
   - aern2-affarith
 - git: git@github.com:michalkonecny/branch-and-prune.git
   # commit: 'c496038d44c328ae79fd7acd0b015bd7f9428294'
   commit: 'c77f581633cfc3a59b519af0d73235a5ecd789aa'
 - github: rasheedja/simplex-method
-  commit: '389ea32300b536b20b42b80c9ee23b156e736dc1'
+  commit: '590c40f158204e97337d123fd3c2c7ebf237edb2'
 
 # Override default flag values for local packages and extra-deps
 # flags: {}
