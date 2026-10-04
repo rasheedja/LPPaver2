@@ -34,6 +34,23 @@ spec = describe "runtime pruning dispatch" $ do
 
     assertRemainingUpperBoundWithin aaBoundTolerance "y" 0.5 paving
 
+  P.mapM_
+    (\useSimplex ->
+       P.mapM_
+         (\lower ->
+            it ("retains feasible points with independent sine errors, simplex=" P.++ show useSimplex P.++ ", lower=" P.++ show lower) $ do
+              let z = exprVar "z"
+                  box = mkBox [("x", (lower, 2.0)), ("y", (0.0, 8.0)), ("z", (0.0, 8.0))]
+                  form = x + sin y <= sin z
+                  -- (1.25, 4, 1) satisfies the constraint. Equal sine ranges
+                  -- must not make unrelated variables' uncertainty cancel.
+              paving <- pruneWith (affineMethod useSimplex) box form
+              assertRemainingBoxUnchanged box paving
+         )
+         [0.0, 1.0]
+    )
+    [False, True]
+
   it "dispatches IA expression values to simplex pruning" $ do
     let box = mkBox [("x", (1.0, 2.0))]
         form = x * x <= exprLit 2.0
