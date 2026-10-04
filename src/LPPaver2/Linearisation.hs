@@ -117,11 +117,13 @@ instance CanLineariseEval MP.MPBall where
   lineariseEvaluatedDifference _ _ _ _ = Nothing
 
 instance CanLineariseEval MPAffine where
-  lineariseEvaluatedDifference exprNodes exprValues e1 e2 = do
-    value1 <- Map.lookup e1 exprValues
-    value2 <- Map.lookup e2 exprValues
-    sources <- sourceVariables exprNodes exprValues
-    pure $ affineToRelaxation sources (value1 - value2)
+  lineariseEvaluatedDifference exprNodes exprValues =
+    let maybeSources = sourceVariables exprNodes exprValues
+     in \e1 e2 -> do
+          value1 <- Map.lookup e1 exprValues
+          value2 <- Map.lookup e2 exprValues
+          sources <- maybeSources
+          pure $ affineToRelaxation sources (value1 - value2)
 
 data SourceVariable = SourceVariable
   { sourceVar :: Var,
@@ -181,13 +183,15 @@ linearRelaxation ::
   ExprHash ->
   ExprHash ->
   Maybe LinearRelaxation
-linearRelaxation exprNodes exprValues e1 e2 =
-  case (lineariseExactExpr exprNodes e1, lineariseExactExpr exprNodes e2) of
-    (Just expression1, Just expression2) ->
-      let difference = subtractExpressions expression1 expression2
-       in Just
-            LinearRelaxation
-              { coefficients = difference.expressionCoefficients,
-                rhs = P.negate difference.expressionConstant
-              }
-    _ -> lineariseEvaluatedDifference exprNodes exprValues e1 e2
+linearRelaxation exprNodes exprValues =
+  let evaluatedDifference = lineariseEvaluatedDifference exprNodes exprValues
+   in \e1 e2 ->
+        case (lineariseExactExpr exprNodes e1, lineariseExactExpr exprNodes e2) of
+          (Just expression1, Just expression2) ->
+            let difference = subtractExpressions expression1 expression2
+             in Just
+                  LinearRelaxation
+                    { coefficients = difference.expressionCoefficients,
+                      rhs = P.negate difference.expressionConstant
+                    }
+          _ -> evaluatedDifference e1 e2
