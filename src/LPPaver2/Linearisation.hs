@@ -7,8 +7,6 @@ where
 
 import AERN2.MP qualified as MP
 import AERN2.MP.Affine (ErrorTermId, MPAffine (..))
-import AERN2.MP.Dyadic (dyadic)
-import AERN2.MP.Float (MPFloat)
 import Data.Map qualified as Map
 import GHC.Records
 import LPPaver2.RealConstraints.Eval (evalExprWith)
@@ -136,7 +134,7 @@ sourceVariables exprNodes exprValues =
   P.foldl addSource (Just Map.empty) sources
   where
     sources =
-      [ (errorId, SourceVariable {sourceVar = var, sourceCentre = mpFloatToRational affine.centre, sourceRadius = mpFloatToRational radius})
+      [ (errorId, SourceVariable {sourceVar = var, sourceCentre = rational affine.centre, sourceRadius = rational radius})
         | (exprHash, ExprVar {var}) <- Map.toList exprNodes,
           Just affine <- [Map.lookup exprHash exprValues],
           [(errorId, radius)] <- [Map.toList affine.errTerms],
@@ -161,8 +159,8 @@ affineToRelaxation sources affine =
 
     classifyTerm (errorId, coefficient) (sourceAcc, residualAcc) =
       case Map.lookup errorId sources of
-        Just source -> ((source, mpFloatToRational coefficient) : sourceAcc, residualAcc)
-        Nothing -> (sourceAcc, mpFloatToRational coefficient : residualAcc)
+        Just source -> ((source, rational coefficient) : sourceAcc, residualAcc)
+        Nothing -> (sourceAcc, rational coefficient : residualAcc)
 
     sourceCoefficients =
       [ (source.sourceVar, coefficient P./ source.sourceRadius)
@@ -173,11 +171,8 @@ affineToRelaxation sources affine =
         [ (coefficient P./ source.sourceRadius) P.* source.sourceCentre
           | (source, coefficient) <- sourceTerms
         ]
-    constant = mpFloatToRational affine.centre P.- centreAdjustment
+    constant = rational affine.centre P.- centreAdjustment
     residualRadius = sum (P.abs <$> residualTerms)
-
-mpFloatToRational :: MPFloat -> Rational
-mpFloatToRational = rational . dyadic
 
 linearRelaxation ::
   (CanLineariseEval r) =>
