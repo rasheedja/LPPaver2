@@ -123,6 +123,7 @@ test-suite LPPaver2-test
       LPPaver2.LinearPruneSpec
       LPPaver2.PruneSpecSupport
       LPPaver2.RealConstraints.EvalSpec
+      LPPaver2.RealConstraints.FormSpec
       LPPaver2.SimplexPruneSpec
       Paths_LPPaver2
   autogen-modules:
