@@ -4,6 +4,7 @@
 
 - Collect formula variables by visiting each reachable formula and expression hash once, avoiding repeated expansion of shared DAGs.
 - Share affine source-variable preparation across comparisons within each ordinary or simplex pruning call.
+- Skip simplex objectives for volume variables absent from the extracted constraints, preserving their domains and feasibility checks.
 - Leave parameter domains unchanged during bound application while continuing to detect contradictory parameter bounds.
 - Reuse the filtered relaxation coefficients when constructing simplex constraints and remove an unreachable empty-map check.
 - Scope the simplex-method dependency to the library component that imports it.

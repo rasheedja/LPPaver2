@@ -61,6 +61,21 @@ spec = describe "simplexPrune" $ do
 
     assertPrunedUpperBound "y" 5.0 result
 
+  it "preserves cancelled variable bounds while tightening another variable" $ do
+    let form = x + y <= exprLit 5.0 + y
+        box = mkBox [("x", (0.0, 10.0)), ("y", (-2.0, 3.0))]
+
+    result <- simplexPrune box form noExprValues
+
+    assertPrunedUpperBound "x" 5.0 result
+    assertPrunedLowerBound "y" (-2.0) result
+    assertPrunedUpperBound "y" 3.0 result
+    case result of
+      Just LinearPruneResult {maybeRemainingBox = Just remainingBox} -> do
+        remainingBox.box_.volumeVars `shouldBe` box.box_.volumeVars
+        remainingBox.box_.splitOrder `shouldBe` box.box_.splitOrder
+      _ -> expectationFailure "expected a tightened box"
+
   it "retains fixed parameter variables used by constraints" $ do
     let baseBox = mkBox [("x", (0.0, 10.0))]
         box = addParamValuesToBox (Map.fromList [("p", 1.0)]) baseBox
@@ -119,8 +134,12 @@ spec = describe "simplexPrune" $ do
     iaResult <- simplexPruneAfterSimplify sampleMPBall box form
     aaResult <- simplexPruneAfterSimplify sampleMPAffine box form
 
+    assertPrunedLowerBound "x" 0.0 iaResult
+    assertPrunedUpperBound "x" 1.0 iaResult
     assertPrunedLowerBoundWithin aaBoundTolerance "y" 0.0 iaResult
     assertPrunedUpperBoundWithin aaBoundTolerance "y" 0.5 iaResult
+    assertPrunedLowerBound "x" 0.0 aaResult
+    assertPrunedUpperBound "x" 1.0 aaResult
     assertPrunedLowerBoundWithin aaBoundTolerance "y" 0.0 aaResult
     assertPrunedUpperBoundWithin aaBoundTolerance "y" 0.5 aaResult
 
@@ -215,6 +234,22 @@ spec = describe "simplexPrune" $ do
     result <- simplexPrune box form noExprValues
 
     assertInfeasible result
+
+  it "checks feasibility when cancellation leaves no volume-variable objectives" $ do
+    let baseBox = mkBox [("x", (0.0, 10.0))]
+        box = addParamValuesToBox (Map.fromList [("p", 1.0)]) baseBox
+        form = x + exprVar "p" <= x
+
+    result <- simplexPrune box form noExprValues
+
+    assertInfeasible result
+
+  it "leaves a feasible box unchanged when no volume-variable objectives remain" $ do
+    let baseBox = mkBox [("x", (0.0, 10.0))]
+        box = addParamValuesToBox (Map.fromList [("p", 1.0)]) baseBox
+        form = x + exprVar "p" <= x + exprLit 2.0
+
+    expectNoPruning =<< simplexPrune box form noExprValues
 
   it "detects constant-false conjuncts" $ do
     let form = (x <= exprLit 0.0) && (exprLit 1.0 <= exprLit 0.0)
