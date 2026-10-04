@@ -97,6 +97,21 @@ spec = describe "simplexPrune" $ do
     assertPrunedUpperBoundWithin aaBoundTolerance "x" 1.5 iaResult
     assertPrunedUpperBoundWithin aaBoundTolerance "x" 1.5 aaResult
 
+  it "uses current-box affine sources across multiple nonlinear comparisons" $ do
+    let form = (sin (x - x) + y <= exprLit 0.5) && (sin (y - y) + x <= exprLit 0.25)
+        boxes =
+          [ mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))],
+            mkBox [("x", (-2.0, 2.0)), ("y", (-4.0, 4.0))]
+          ]
+
+    P.mapM_
+      (\box -> do
+         result <- simplexPruneAfterSimplify sampleMPAffine box form
+         assertPrunedUpperBoundWithin aaBoundTolerance "x" 0.25 result
+         assertPrunedUpperBoundWithin aaBoundTolerance "y" 0.5 result
+      )
+      boxes
+
   it "uses interval derivative cancellation as well as affine cancellation" $ do
     let form = sin (x - x) + y <= exprLit 0.5
         box = mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))]

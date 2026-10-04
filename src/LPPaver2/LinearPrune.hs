@@ -108,8 +108,8 @@ linearPruneWithEvalValues ::
 linearPruneWithEvalValues BP.Problem {scope, constraint} exprValues =
   let maybeIEInfo = extractCIEorDIE constraint
    in case maybeIEInfo of
-        Just (cieForm, CIE) -> linearPruneCIE scope exprValues (extractIEsFromCIE cieForm)
-        Just (ieForm, IE) -> linearPruneCIE scope exprValues [ieForm] -- TODO: try both CIE and DIE and use the better result
+        Just (cieForm, CIE) -> linearPruneCIE scope cieForm.nodesE exprValues (extractIEsFromCIE cieForm)
+        Just (ieForm, IE) -> linearPruneCIE scope ieForm.nodesE exprValues [ieForm] -- TODO: try both CIE and DIE and use the better result
         -- TODO: implement linear pruning for disjunctions of inequalities
         _ -> Nothing -- not a form suitable for linear pruning
 
@@ -131,8 +131,8 @@ data TightenResult
   | TightenNoImprovement
   | TightenImproved Box
 
-linearPruneCIE :: (CanLineariseEval r) => Box -> Map.Map ExprHash r -> [Form] -> Maybe LinearPruneResult
-linearPruneCIE scope exprValues ies
+linearPruneCIE :: (CanLineariseEval r) => Box -> ExprStore -> Map.Map ExprHash r -> [Form] -> Maybe LinearPruneResult
+linearPruneCIE scope exprNodes exprValues ies
   | any isInfeasible extractionResults =
       Just
         LinearPruneResult
@@ -150,6 +150,7 @@ linearPruneCIE scope exprValues ies
         TightenNoImprovement -> Nothing
         TightenImproved newBox -> Just (makeResult newBox)
   where
+    relaxComparison = linearRelaxation exprNodes exprValues
     extractionResults = P.map extractVarBound ies
     varBoundsFromInequalities = P.concatMap boundsFromResult extractionResults
 
@@ -166,14 +167,14 @@ linearPruneCIE scope exprValues ies
       case lookupFormNode form form.root of
         FormComp {comp, e1, e2} ->
           case comp of
-            CompLe -> boundsFromLessOrEqual form.nodesE e1 e2
-            CompLeq -> boundsFromLessOrEqual form.nodesE e1 e2
-            CompEq -> mergeExtractions (boundsFromLessOrEqual form.nodesE e1 e2) (boundsFromLessOrEqual form.nodesE e2 e1)
+            CompLe -> boundsFromLessOrEqual e1 e2
+            CompLeq -> boundsFromLessOrEqual e1 e2
+            CompEq -> mergeExtractions (boundsFromLessOrEqual e1 e2) (boundsFromLessOrEqual e2 e1)
             CompNeq -> Bounds []
         _ -> Bounds [] -- not a comparison, shouldn't happen since we only call this on IEs
-    boundsFromLessOrEqual :: ExprStore -> ExprHash -> ExprHash -> BoundExtraction
-    boundsFromLessOrEqual exprNodes e1 e2 =
-      case linearRelaxation exprNodes exprValues e1 e2 of
+    boundsFromLessOrEqual :: ExprHash -> ExprHash -> BoundExtraction
+    boundsFromLessOrEqual e1 e2 =
+      case relaxComparison e1 e2 of
         Just relaxation -> boundsFromRelaxation relaxation
         Nothing -> Bounds []
 

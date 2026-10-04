@@ -78,10 +78,12 @@ simplexRelaxations ::
   ExprHash ->
   ExprHash ->
   [LinearRelaxation]
-simplexRelaxations scope exprNodes exprValues e1 e2 =
-  case linearRelaxation exprNodes exprValues e1 e2 of
-    Just relaxation -> [relaxation]
-    Nothing -> nonlinearSimplexRelaxations scope exprNodes exprValues e1 e2
+simplexRelaxations scope exprNodes exprValues =
+  let relaxComparison = linearRelaxation exprNodes exprValues
+   in \e1 e2 ->
+        case relaxComparison e1 e2 of
+          Just relaxation -> [relaxation]
+          Nothing -> nonlinearSimplexRelaxations scope exprNodes exprValues e1 e2
 
 intervalCornerRelaxations :: Box -> ExprStore -> Map.Map ExprHash MP.MPBall -> ExprHash -> ExprHash -> [LinearRelaxation]
 intervalCornerRelaxations scope exprNodes exprValues e1 e2 =
@@ -205,6 +207,8 @@ extractSimplexConstraints ::
 extractSimplexConstraints scope exprNodes exprValues varToInt form0 =
   extractFromRoot form0.root
   where
+    relaxComparison = simplexRelaxations scope exprNodes exprValues
+
     extractFromRoot :: FormHash -> ConstraintExtraction
     extractFromRoot fH =
       case lookupFormNode form0 fH of
@@ -229,7 +233,7 @@ extractSimplexConstraints scope exprNodes exprValues varToInt form0 =
       P.foldl
         mergeConstraints
         (Constraints [])
-        (relaxationToSimplexConstraint varToInt <$> simplexRelaxations scope exprNodes exprValues e1H e2H)
+        (relaxationToSimplexConstraint varToInt <$> relaxComparison e1H e2H)
 
 -- | Create simplex variable domain constraints from box bounds.
 boxToVarDomains :: Map.Map Var Int -> Box -> ST.VarDomainMap
