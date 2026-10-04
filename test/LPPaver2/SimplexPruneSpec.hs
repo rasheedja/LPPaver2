@@ -14,7 +14,7 @@ import LPPaver2.RealConstraints.EvalArithmetic.AffArith ()
 import LPPaver2.RealConstraints.EvalArithmetic.MPBall ()
 import LPPaver2.RealConstraints.Expr (ExprHash, exprLit, exprVar)
 import LPPaver2.RealConstraints.Form (Form)
-import LPPaver2.SimplexPrune (CanProvideSimplexRelaxations, simplexPrune, simplexPruneWithEvalValues)
+import LPPaver2.SimplexPrune (CanProvideSimplexRelaxations, simplexPrune)
 import MixedTypesNumPrelude
 import Test.Hspec
 import Test.QuickCheck (Property, chooseInteger, conjoin, counterexample, forAll, ioProperty, property)
@@ -227,7 +227,7 @@ simplexPruneAfterSimplify ::
   Form ->
   IO (Maybe LinearPruneResult)
 simplexPruneAfterSimplify sampleR box form =
-  simplexPruneWithEvalValues box simplifiedForm exprValues
+  simplexPrune box simplifiedForm exprValues
   where
     (simplifiedForm, exprValues) = simplifiedFormAndValues sampleR box form
 
