@@ -228,17 +228,9 @@ tightenBoxByBoundsChecked scope bounds
   | otherwise = TightenNoImprovement
   where
     varDomains = scope.box_.varDomains
-    allTightenedVarDomains = foldl applyBound varDomains bounds
     -- Parameter domains participate in contradiction detection but are never
     -- changed in the result because only volume variables may be pruned.
-    tightenedVarDomains =
-      Map.mapWithKey
-        (\var newDomain ->
-           if var `Set.member` scope.box_.volumeVars
-             then newDomain
-             else varDomains Map.! var
-        )
-        allTightenedVarDomains
+    tightenedVarDomains = foldl applyBound varDomains bounds
 
     hasEmptyDomain = P.any domainIsEmpty (Map.toList varDomains)
     domainIsEmpty (var, ball) =
@@ -261,7 +253,9 @@ tightenBoxByBoundsChecked scope bounds
         applyUpper upper (Just bound) = P.min upper bound
         applyUpper upper Nothing = upper
 
-    applyBound varDoms (var, (maybeLower, maybeUpper)) = applyUpper $ applyLower varDoms
+    applyBound varDoms (var, (maybeLower, maybeUpper))
+      | var `Set.notMember` scope.box_.volumeVars = varDoms
+      | otherwise = applyUpper $ applyLower varDoms
       where
         applyLower =
           case maybeLower of

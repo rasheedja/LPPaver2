@@ -130,6 +130,13 @@ spec = do
 
       assertInfeasible $ linearPrune BP.Problem {scope = box, constraint = form}
 
+    it "detects contradictory parameter bounds while tightening volume variables" $ do
+      let baseBox = mkBox [("x", (0.0, 10.0))]
+          box = addParamValuesToBox (Map.fromList [("p", 1.0)]) baseBox
+          form = (x <= exprLit 5.0) && (exprVar "p" <= exprLit 0.0)
+
+      assertInfeasible $ linearPrune BP.Problem {scope = box, constraint = form}
+
     it "preserves fixed parameter domains while tightening volume variables" $ do
       let baseBox = mkBox [("x", (0.0, 10.0))]
           box = addParamValuesToBox (Map.fromList [("p", 1.0)]) baseBox
