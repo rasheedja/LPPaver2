@@ -52,14 +52,14 @@ packages:
 - completed:
     name: simplex-method
     pantry-tree:
-      sha256: b86626d0975f1453a066bd8417fc1d7c74395be8c6379ae38e80e3384692a65d
+      sha256: 734e9e2b5468d01faf8fd90d538f21ce8df9c86d3dbee347f1c488b0c02422c7
       size: 1359
-    sha256: 2088827f4c9bf1be840eddda5cfbb8bc080d62f8ac84c51f478ebc0d823273ae
-    size: 39303
-    url: https://github.com/rasheedja/simplex-method/archive/590c40f158204e97337d123fd3c2c7ebf237edb2.tar.gz
+    sha256: 01ecc3399632d8f24929270d5badb9dad319e3dcf587f27b1c79ddb4e32c41eb
+    size: 41955
+    url: https://github.com/rasheedja/simplex-method/archive/9d59ab1579adb8bc871101e6c766c502407f6413.tar.gz
     version: 0.2.0.0
   original:
-    url: https://github.com/rasheedja/simplex-method/archive/590c40f158204e97337d123fd3c2c7ebf237edb2.tar.gz
+    url: https://github.com/rasheedja/simplex-method/archive/9d59ab1579adb8bc871101e6c766c502407f6413.tar.gz
 snapshots:
 - completed:
     sha256: 238fa745b64f91184f9aa518fe04bdde6552533d169b0da5256670df83a0f1a9
