@@ -108,7 +108,6 @@ executable lppaver2-server
     , mixed-types-num
     , monad-logger
     , mtl
-    , simplex-method
     , text
     , time
     , transformers
@@ -153,7 +152,6 @@ test-suite LPPaver2-test
     , mixed-types-num
     , monad-logger
     , mtl
-    , simplex-method
     , text
     , time
     , transformers

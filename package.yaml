@@ -35,7 +35,6 @@ dependencies:
 - aern2-mp
 - aern2-affarith
 - branch-and-prune
-- simplex-method
 - hspec # VS Code plugin needs this (bug?)
 
 default-extensions:
@@ -60,6 +59,8 @@ ghc-options:
 
 library:
   source-dirs: src
+  dependencies:
+  - simplex-method
   other-modules:
   - LPPaver2.Linearisation
   - LPPaver2.RealConstraints.IntervalAD
