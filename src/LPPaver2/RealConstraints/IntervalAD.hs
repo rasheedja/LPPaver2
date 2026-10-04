@@ -131,24 +131,19 @@ mpBallBounds ball = (rational lower, rational upper)
 lowerBound :: MP.MPBall -> Rational
 lowerBound = P.fst . mpBallBounds
 
-excludesZero :: MP.MPBall -> Bool
-excludesZero ball = lower > rational 0 P.|| upper < rational 0
-  where
-    (lower, upper) = mpBallBounds ball
-
 divideBalls :: MP.MPBall -> MP.MPBall -> Maybe MP.MPBall
 divideBalls numerator denominator = (numerator P.*) <$> reciprocalBall denominator
 
 reciprocalBall :: MP.MPBall -> Maybe MP.MPBall
 reciprocalBall ball
-  | excludesZero ball = Just $ ballFromBounds (getPrecision ball) (P.recip upper) (P.recip lower)
+  | isCertainlyNonZero ball = Just $ ballFromBounds (getPrecision ball) (P.recip upper) (P.recip lower)
   | otherwise = Nothing
   where
     (lower, upper) = mpBallBounds ball
 
 reciprocalSquareBall :: MP.MPBall -> Maybe MP.MPBall
 reciprocalSquareBall ball
-  | excludesZero ball =
+  | isCertainlyNonZero ball =
       Just
         $ ballFromBounds
           (getPrecision ball)
