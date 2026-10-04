@@ -1,6 +1,7 @@
 module LPPaver2.LinearPruneSpec (spec) where
 
 import AERN2.MP qualified as MP
+import AERN2.MP.Affine (MPAffine (..))
 import BranchAndPrune.BranchAndPrune qualified as BP
 import Data.Map qualified as Map
 import GHC.Records (HasField (getField))
@@ -17,6 +18,7 @@ import LPPaver2.RealConstraints.Expr
 import LPPaver2.RealConstraints.Form
 import MixedTypesNumPrelude
 import Test.Hspec
+import Prelude qualified as P
 
 lit1 :: Expr
 lit1 = exprLit 1.0
@@ -90,6 +92,42 @@ spec = do
       extractCIEorDIE ((nonie || cie1) && (nonie && cie2)) `shouldBe` Just (cie2, CIE)
 
   describe "linearPruneWithEvalValues" $ do
+    it "uses current-box affine sources across multiple nonlinear comparisons" $ do
+      let form = (sin (x - x) + y <= exprLit 0.5) && (sin (y - y) + x <= exprLit 0.25)
+          boxes =
+            [ mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))],
+              mkBox [("x", (-2.0, 2.0)), ("y", (-4.0, 4.0))]
+            ]
+
+      P.mapM_
+        (\box -> do
+           let result = linearPruneAfterSimplify sampleMPAffine box form
+           assertPrunedUpperBoundWithin aaBoundTolerance "x" 0.25 result
+           assertPrunedUpperBoundWithin aaBoundTolerance "y" 0.5 result
+        )
+        boxes
+
+    it "rejects ambiguous affine sources for every comparison while retaining exact relaxation" $ do
+      let left1 = sin x + y
+          left2 = sin y + x
+          right1 = exprLit 0.5
+          right2 = exprLit 0.25
+          form = (left1 <= right1) && (left2 <= right2)
+          box = mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))]
+          (_, exprValues) = simplifiedFormAndValues sampleMPAffine box form
+          -- Make two different source variables claim the same noise symbol.
+          ambiguousValues = Map.adjust (\affine -> affine {errTerms = (exprValues Map.! x.root).errTerms}) y.root exprValues
+          relax = linearRelaxation form.nodesE ambiguousValues
+
+      case (relax left1.root right1.root, relax left2.root right2.root) of
+        (Nothing, Nothing) -> pure ()
+        _ -> expectationFailure "expected both affine relaxations to reject ambiguous sources"
+      case relax x.root right1.root of
+        Just relaxation -> do
+          relaxation.coefficients `shouldBe` Map.singleton "x" (rational 1)
+          relaxation.rhs `shouldBe` rational 0.5
+        Nothing -> expectationFailure "expected exact relaxation to remain available"
+
     it "uses an affine relaxation when available" $ do
       let form = sin (x - x) + y <= exprLit 0.5
           box = mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))]
