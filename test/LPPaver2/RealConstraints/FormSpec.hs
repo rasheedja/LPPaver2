@@ -60,7 +60,5 @@ spec = describe "formVariables" $ do
 
 completesWithX :: Form -> Expectation
 completesWithX form = do
-  -- The old traversal expands over four billion paths at depth 32. Bound a
-  -- regression's runtime while allowing ample time for visiting the small DAG.
   result <- timeout (int 5000000) $ evaluate (formVariables form P.== Set.singleton "x")
   result `shouldBe` Just True
