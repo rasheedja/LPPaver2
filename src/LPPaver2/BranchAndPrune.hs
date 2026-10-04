@@ -27,7 +27,7 @@ import GHC.Records
 import LPPaver2.LinearPrune (LinearPruneResult (..), linearPruneWithEvalValues)
 import LPPaver2.RealConstraints
 import LPPaver2.RealConstraints.Eval (EvaluatedFormR (..))
-import LPPaver2.SimplexPrune (CanProvideSimplexRelaxations, simplexPruneWithEvalValues)
+import LPPaver2.SimplexPrune (CanProvideSimplexRelaxations, simplexPrune)
 import MixedTypesNumPrelude
 import Text.Printf (printf)
 
@@ -182,7 +182,7 @@ pruneWithEvalValues ::
 pruneWithEvalValues useSimplex scope simplifiedFormProblem exprValues = do
   maybeSimplexResult <-
     if useSimplex
-      then simplexPruneWithEvalValues simplifiedFormProblem.scope simplifiedForm exprValues
+      then simplexPrune simplifiedFormProblem.scope simplifiedForm exprValues
       else pure Nothing
   case maybeSimplexResult of
     Just simplexResult -> pure $ mkLinearPrunePaving scope simplifiedForm simplexResult
