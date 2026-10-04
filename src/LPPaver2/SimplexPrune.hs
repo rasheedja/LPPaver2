@@ -265,10 +265,7 @@ simplexPrune scope simplifiedForm exprValues = do
       if P.null constraints
         then pure Nothing
         else do
-          -- Variables absent from the extracted constraints can only retain
-          -- their existing domain bounds, so they need no optimization.
-          let -- Constraint extraction has already removed zero coefficients.
-              constrainedVars = Set.unions [Map.keysSet constraint.lhs | constraint <- constraints]
+          let constrainedVars = Set.unions [Map.keysSet constraint.lhs | constraint <- constraints]
               vars = Map.toList varToInt
               objectives =
                 P.concatMap
