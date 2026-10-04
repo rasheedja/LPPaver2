@@ -176,9 +176,6 @@ affineToRelaxation sources affine =
     constant = rational affine.centre P.- centreAdjustment
     residualRadius = sum (P.abs <$> residualTerms)
 
--- | Apply the expression store and evaluated values once, then reuse the
--- resulting function for comparisons in this evaluated form.  Its affine
--- source map is shared, and stays scoped to the current box's values.
 linearRelaxation ::
   (CanLineariseEval r) =>
   ExprStore ->
