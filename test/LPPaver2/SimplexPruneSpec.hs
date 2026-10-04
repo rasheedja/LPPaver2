@@ -190,6 +190,9 @@ spec = describe "simplexPrune" $ do
   it "never removes generated feasible boundary points" $
     property generatedFeasiblePointsAreRetained
 
+  it "retains generated square-root boundary points while tightening positive domains" $
+    property generatedSqrtBoundaryPointsAreRetained
+
   it "detects contradictory linear constraints" $ do
     let form = (x <= exprLit 0.0) && (exprLit 1.0 <= x)
         box = mkBox [("x", (0.0, 1.0))]
@@ -263,6 +266,28 @@ generatedFeasiblePointsAreRetained =
               retentionProperty "sqrt x <= q" [("x", qSquared)] sqrtBox
                 $ sqrt x <= exprLit q
             pure $ conjoin [upperSquare, lowerSquare, productCase, reciprocalCase, sqrtCase]
+
+generatedSqrtBoundaryPointsAreRetained :: Property
+generatedSqrtBoundaryPointsAreRetained =
+  forAll (chooseInteger (1001, 1500)) $ \qNumerator ->
+    let q = rational qNumerator P./ rational 1000
+        qSquared = q P.* q
+        box = mkBox [("x", (1.0, 4.0))]
+        form = sqrt x <= exprLit q
+     in ioProperty $ do
+          result <- simplexPruneAfterSimplify sampleMPBall box form
+          pure $
+            conjoin
+              [ counterexample "sqrt x <= q pruned its feasible boundary x = q^2" $
+                  pointIsRetained [("x", qSquared)] result,
+                counterexample "expected square-root pruning to tighten the upper bound below 4" $
+                  case result of
+                    Just LinearPruneResult {maybeRemainingBox = Just remainingBox} ->
+                      case Map.lookup "x" remainingBox.box_.varDomains of
+                        Just domain -> rational (P.snd (MP.endpoints domain)) P.< rational 4
+                        Nothing -> False
+                    _ -> False
+              ]
 
 retentionProperty :: String -> [(String, Rational)] -> Box -> Form -> IO Property
 retentionProperty label point box form = do
