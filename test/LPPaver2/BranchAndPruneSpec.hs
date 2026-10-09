@@ -51,6 +51,29 @@ spec = describe "runtime pruning dispatch" $ do
     )
     [False, True]
 
+  P.mapM_
+    (\(arithmeticLabel, arithmeticMethod) ->
+       P.mapM_
+         (\useSimplex ->
+            P.mapM_
+              (\lower ->
+                 it ("retains feasible points with independent reciprocal errors, " P.++ arithmeticLabel P.++ ", simplex=" P.++ show useSimplex P.++ ", lower=" P.++ show lower) $ do
+                   let z = exprVar "z"
+                       box = mkBox [("x", (lower, 0.5)), ("y", (1.0, 2.0)), ("z", (1.0, 2.0))]
+                       form = x + exprLit 1.0 / y <= exprLit 1.0 / z && y <= exprLit 1.5
+                       -- (0.3, 1.5, 1) satisfies both constraints. Reciprocals of
+                       -- unrelated variables with matching ranges must not cancel
+                       -- their uncertainty, which previously collapsed x onto 0.
+                       feasiblePoint = [("x", 0.3), ("y", 1.5), ("z", 1.0)]
+                   paving <- pruneWith (arithmeticMethod useSimplex) box form
+                   assertRetainsPoint feasiblePoint paving
+              )
+              [0.0, 0.3]
+         )
+         [False, True]
+    )
+    [("IA", mpBallMethod), ("AA", affineMethod)]
+
   it "dispatches IA expression values to simplex pruning" $ do
     let box = mkBox [("x", (1.0, 2.0))]
         form = x * x <= exprLit 2.0
@@ -149,3 +172,25 @@ assertRemainingBoxUnchanged original paving =
                       && rational originalUpper == rational remainingUpper
       P.all sameDomain (Map.toList originalDomains) `shouldBe` True
       remaining.box_.volumeVars `shouldBe` original.box_.volumeVars
+
+-- | Assert that pruning kept a given feasible point: it must lie inside the
+-- undecided or inner region and must not lie inside any excluded outer box.
+assertRetainsPoint :: [(String, Rational)] -> BP.Paving Form Box Boxes -> Expectation
+assertRetainsPoint point paving = do
+  let containsPoint domains =
+        P.all
+          (\(var, value) ->
+             case Map.lookup var domains of
+               Nothing -> False
+               Just domain ->
+                 let (lower, upper) = MP.endpoints domain
+                  in rational lower P.<= value P.&& value P.<= rational upper
+          )
+          point
+      pointInside box =
+        containsPoint box.box_.varDomains
+          P.&& P.not (P.maybe False containsPoint box.box_.except)
+      undecidedBoxes = [scope | BP.Problem {scope} <- paving.undecided]
+
+  P.any pointInside (Map.elems paving.inner.store P.++ undecidedBoxes) `shouldBe` True
+  P.any pointInside (Map.elems paving.outer.store) `shouldBe` False
