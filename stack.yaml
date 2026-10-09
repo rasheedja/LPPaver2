@@ -52,8 +52,8 @@ extra-deps:
 - row-types-1.0.1.2
 - mixed-types-num-0.6.2
 - aern2-mp-0.2.16.1
-- github: rasheedja/aern2
-  commit: '6eac5490fb235932f934909f5b04baf3b0ed4577'
+- github: michalkonecny/aern2
+  commit: 'c507b29ee7ea3bdc2a410a154fed0e6aa736f70c'
   subdirs:
   - aern2-affarith
 - git: git@github.com:michalkonecny/branch-and-prune.git
