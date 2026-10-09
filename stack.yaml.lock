@@ -28,16 +28,16 @@ packages:
 - completed:
     name: aern2-affarith
     pantry-tree:
-      sha256: 88a66c4c675db155a3a73b8b3768bdb9a65d06724c3ff67648aa526c540ceb4a
-      size: 922
-    sha256: e26e83221953b43bd83a2baaa1c150e2df77e2b8e50b279cf86d9546afd70207
-    size: 168152731
+      sha256: 0a234454a04c3077412227ca6fddc371f8f226810c3bac03730141b104e9583d
+      size: 975
+    sha256: 2f6f8351c9ef325668e3feb9415918e3afab2d1a9990892ad0b9aa4f47d442d5
+    size: 168157161
     subdir: aern2-affarith
-    url: https://github.com/michalkonecny/aern2/archive/b9ec190cf9e2e165672b56e11690ae172fee3cde.tar.gz
+    url: https://github.com/michalkonecny/aern2/archive/c507b29ee7ea3bdc2a410a154fed0e6aa736f70c.tar.gz
     version: 0.2.16.0
   original:
     subdir: aern2-affarith
-    url: https://github.com/michalkonecny/aern2/archive/b9ec190cf9e2e165672b56e11690ae172fee3cde.tar.gz
+    url: https://github.com/michalkonecny/aern2/archive/c507b29ee7ea3bdc2a410a154fed0e6aa736f70c.tar.gz
 - completed:
     commit: c77f581633cfc3a59b519af0d73235a5ecd789aa
     git: git@github.com:michalkonecny/branch-and-prune.git
@@ -49,6 +49,17 @@ packages:
   original:
     commit: c77f581633cfc3a59b519af0d73235a5ecd789aa
     git: git@github.com:michalkonecny/branch-and-prune.git
+- completed:
+    name: simplex-method
+    pantry-tree:
+      sha256: 734e9e2b5468d01faf8fd90d538f21ce8df9c86d3dbee347f1c488b0c02422c7
+      size: 1359
+    sha256: 01ecc3399632d8f24929270d5badb9dad319e3dcf587f27b1c79ddb4e32c41eb
+    size: 41955
+    url: https://github.com/rasheedja/simplex-method/archive/9d59ab1579adb8bc871101e6c766c502407f6413.tar.gz
+    version: 0.2.0.0
+  original:
+    url: https://github.com/rasheedja/simplex-method/archive/9d59ab1579adb8bc871101e6c766c502407f6413.tar.gz
 snapshots:
 - completed:
     sha256: 238fa745b64f91184f9aa518fe04bdde6552533d169b0da5256670df83a0f1a9
