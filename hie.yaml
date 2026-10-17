@@ -1,2 +1,8 @@
 cradle:
   stack:
+    - path: "./src"
+      component: "LPPaver2:lib"
+    - path: "./server"
+      component: "LPPaver2:exe:lppaver2-server"
+    - path: "./test"
+      component: "LPPaver2:test:LPPaver2-test"
