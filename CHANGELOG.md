@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Make `simplexPrune` a pure function; the simplex-method solver no longer requires IO.
 - Pin simplex-method to `3e2a86b`, which drops the `MonadIO` requirement from the two-phase simplex solver.
 - Collect formula variables by visiting each reachable formula and expression hash once, avoiding repeated expansion of shared DAGs.
 - Share affine source-variable preparation across comparisons within each ordinary or simplex pruning call.

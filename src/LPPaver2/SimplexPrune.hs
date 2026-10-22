@@ -7,8 +7,8 @@ where
 import AERN2.MP (HasPrecision (..), mpBallP)
 import AERN2.MP qualified as MP
 import AERN2.MP.Affine (MPAffine)
-import Control.Monad.IO.Unlift (MonadIO)
 import Control.Monad.Logger (runNoLoggingT)
+import Data.Functor.Identity (runIdentity)
 import Data.Map qualified as Map
 import Data.Set qualified as Set
 import GHC.Records (HasField (getField))
@@ -252,56 +252,54 @@ boxToVarDomains varToInt box =
 -- For each constrained volume variable, maximize and minimize subject to all constraints.
 -- Returns a tighter box if any improvement is found.
 simplexPrune ::
-  (MonadIO m, CanProvideSimplexRelaxations r) =>
+  (CanProvideSimplexRelaxations r) =>
   Box ->
   Form ->
   Map.Map ExprHash r ->
-  m (Maybe LinearPruneResult)
-simplexPrune scope simplifiedForm exprValues = do
+  Maybe LinearPruneResult
+simplexPrune scope simplifiedForm exprValues =
   let (varToInt, intToVar) = createVarMapping (formVariables simplifiedForm) scope
-  let constraintExtraction = extractSimplexConstraints scope simplifiedForm.nodesE exprValues varToInt simplifiedForm
-  let varDomains = boxToVarDomains varToInt scope
-  case constraintExtraction of
-    Infeasible ->
-      pure $ Just LinearPruneResult {maybeRemainingBox = Nothing, removedRegionTruth = False}
-    Constraints constraints ->
-      -- If we extracted no linear constraints beyond box bounds, simplex won't help
-      if P.null constraints
-        then pure Nothing
-        else do
-          let constrainedVars = Set.unions [Map.keysSet constraint.lhs | constraint <- constraints]
-              vars = Map.toList varToInt
-              objectives =
-                P.concatMap
-                  ( \(var, intVar) ->
-                      if var `Set.member` scope.box_.volumeVars P.&& intVar `Set.member` constrainedVars
-                        then
-                          [ ST.Min {objective = Map.singleton intVar (rational 1)},
-                            ST.Max {objective = Map.singleton intVar (rational 1)}
-                          ]
-                        else []
-                  )
-                  vars
+      constraintExtraction = extractSimplexConstraints scope simplifiedForm.nodesE exprValues varToInt simplifiedForm
+      varDomains = boxToVarDomains varToInt scope
+   in case constraintExtraction of
+        Infeasible ->
+          Just LinearPruneResult {maybeRemainingBox = Nothing, removedRegionTruth = False}
+        Constraints constraints ->
+          -- If we extracted no linear constraints beyond box bounds, simplex won't help
+          if P.null constraints
+            then Nothing
+            else
+              let constrainedVars = Set.unions [Map.keysSet constraint.lhs | constraint <- constraints]
+                  vars = Map.toList varToInt
+                  objectives =
+                    P.concatMap
+                      ( \(var, intVar) ->
+                          if var `Set.member` scope.box_.volumeVars P.&& intVar `Set.member` constrainedVars
+                            then
+                              [ ST.Min {objective = Map.singleton intVar (rational 1)},
+                                ST.Max {objective = Map.singleton intVar (rational 1)}
+                              ]
+                            else []
+                      )
+                      vars
 
-          result <- runNoLoggingT $ Simplex.twoPhaseSimplex varDomains objectives constraints
-
-          case result.feasibleSystem of
-            Nothing ->
-              -- Infeasible means the constraint conjunction is unsatisfiable on this box
-              pure
-                $ Just
-                  LinearPruneResult
-                    { maybeRemainingBox = Nothing,
-                      removedRegionTruth = False -- the constraint is false on the entire box
-                    }
-            Just _ -> do
-              -- Extract tightened bounds from objective results
-              let objResults = result.objectiveResults
-              let newBounds = extractBoundsFromResults intToVar objResults
-              let tightenedBox = tightenBoxByBounds scope (Map.toList newBounds)
-              case tightenedBox of
-                Just box -> pure $ Just LinearPruneResult {maybeRemainingBox = Just box, removedRegionTruth = False}
-                Nothing -> pure Nothing
+                  result = runIdentity $ runNoLoggingT $ Simplex.twoPhaseSimplex varDomains objectives constraints
+               in case result.feasibleSystem of
+                    Nothing ->
+                      -- Infeasible means the constraint conjunction is unsatisfiable on this box
+                      Just
+                        LinearPruneResult
+                          { maybeRemainingBox = Nothing,
+                            removedRegionTruth = False -- the constraint is false on the entire box
+                          }
+                    Just _ ->
+                      -- Extract tightened bounds from objective results
+                      let objResults = result.objectiveResults
+                          newBounds = extractBoundsFromResults intToVar objResults
+                          tightenedBox = tightenBoxByBounds scope (Map.toList newBounds)
+                       in case tightenedBox of
+                            Just box -> Just LinearPruneResult {maybeRemainingBox = Just box, removedRegionTruth = False}
+                            Nothing -> Nothing
 
 -- | Extract bounds using the objective carried by each simplex result.
 extractBoundsFromResults ::
