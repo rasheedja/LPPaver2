@@ -88,11 +88,11 @@ exampleProblemsList =
               constraint = (y <= exprLit 1.25) && (exprLit 1.25 <= x) && (y <= sin (10.0 * x))
             }
       ),
-      ( "circle",
+      ( "ellipse",
         noParams
           $ Problem
             { scope = mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))],
-              constraint = (x * x + y * y <= 1.0)
+              constraint = (x * x - y * x + y * y <= 0.5)
             }
       ),
       ( "circleEps",
