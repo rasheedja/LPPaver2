@@ -26,13 +26,13 @@ spec = describe "simplexPrune" $ do
     let form = 3.0 * x - y <= exprLit 0.0
         box = mkBox [("x", (-1.0, 10.0)), ("y", (0.0, 6.0))]
 
-    assertPrunedUpperBound "x" 2.0 $ simplexPrune box form noExprValues
+    assertPrunedUpperBound "x" 2.0 $ simplexPrune noGiveUpAccuracy box form noExprValues
 
   it "decomposes division by a positive literal exactly" $ do
     let form = x / exprLit 2.0 + y <= exprLit 1.0
         box = mkBox [("x", (0.0, 4.0)), ("y", (0.0, 4.0))]
 
-    let result = simplexPrune box form noExprValues
+    let result = simplexPrune noGiveUpAccuracy box form noExprValues
 
     assertPrunedUpperBound "x" 2.0 result
     assertPrunedUpperBound "y" 1.0 result
@@ -41,7 +41,7 @@ spec = describe "simplexPrune" $ do
     let form = x / exprLit (-2.0) + y <= exprLit (-1.0)
         box = mkBox [("x", (0.0, 4.0)), ("y", (0.0, 4.0))]
 
-    let result = simplexPrune box form noExprValues
+    let result = simplexPrune noGiveUpAccuracy box form noExprValues
 
     assertPrunedLowerBound "x" 2.0 result
 
@@ -49,7 +49,7 @@ spec = describe "simplexPrune" $ do
     let form = x + y <= exprLit 5.0
         box = mkBox [("x", (0.0, 0.0)), ("y", (0.0, 10.0))]
 
-    let result = simplexPrune box form noExprValues
+    let result = simplexPrune noGiveUpAccuracy box form noExprValues
 
     assertPrunedUpperBound "y" 5.0 result
 
@@ -57,7 +57,7 @@ spec = describe "simplexPrune" $ do
     let form = y <= exprLit 5.0
         box = mkBox [("x", (0.0, 0.0)), ("y", (0.0, 10.0))]
 
-    let result = simplexPrune box form noExprValues
+    let result = simplexPrune noGiveUpAccuracy box form noExprValues
 
     assertPrunedUpperBound "y" 5.0 result
 
@@ -65,7 +65,7 @@ spec = describe "simplexPrune" $ do
     let form = x + y <= exprLit 5.0 + y
         box = mkBox [("x", (0.0, 10.0)), ("y", (-2.0, 3.0))]
 
-    let result = simplexPrune box form noExprValues
+    let result = simplexPrune noGiveUpAccuracy box form noExprValues
 
     assertPrunedUpperBound "x" 5.0 result
     assertPrunedLowerBound "y" (-2.0) result
@@ -81,7 +81,7 @@ spec = describe "simplexPrune" $ do
         box = addParamValuesToBox (Map.fromList [("p", 1.0)]) baseBox
         form = x + exprVar "p" <= exprLit 5.0
 
-    let result = simplexPrune box form noExprValues
+    let result = simplexPrune noGiveUpAccuracy box form noExprValues
 
     assertPrunedUpperBound "x" 4.0 result
     case result of
@@ -98,7 +98,7 @@ spec = describe "simplexPrune" $ do
         form = sharedExpression <= exprLit coefficient
         box = mkBox [("x", (0.0, 2.0))]
 
-    let result = simplexPrune box form noExprValues
+    let result = simplexPrune noGiveUpAccuracy box form noExprValues
 
     assertPrunedUpperBound "x" 1.0 result
 
@@ -205,13 +205,13 @@ spec = describe "simplexPrune" $ do
     let form = exprLit 1.0 / x <= exprLit 0.5
         box = mkBox [("x", (-1.0, 4.0))]
 
-    expectNoPruning $ simplexPrune box form noExprValues
+    expectNoPruning $ simplexPrune noGiveUpAccuracy box form noExprValues
 
   it "skips square-root linearisation when its derivative is unbounded at zero" $ do
     let form = sqrt x <= exprLit 1.0
         box = mkBox [("x", (0.0, 4.0))]
 
-    expectNoPruning $ simplexPrune box form noExprValues
+    expectNoPruning $ simplexPrune noGiveUpAccuracy box form noExprValues
 
   it "retains feasible points when trigonometric derivatives change sign" $ do
     let form = sin x <= exprLit 0.0
@@ -231,7 +231,7 @@ spec = describe "simplexPrune" $ do
     let form = (x <= exprLit 0.0) && (exprLit 1.0 <= x)
         box = mkBox [("x", (0.0, 1.0))]
 
-    let result = simplexPrune box form noExprValues
+    let result = simplexPrune noGiveUpAccuracy box form noExprValues
 
     assertInfeasible result
 
@@ -240,7 +240,7 @@ spec = describe "simplexPrune" $ do
         box = addParamValuesToBox (Map.fromList [("p", 1.0)]) baseBox
         form = x + exprVar "p" <= x
 
-    let result = simplexPrune box form noExprValues
+    let result = simplexPrune noGiveUpAccuracy box form noExprValues
 
     assertInfeasible result
 
@@ -249,13 +249,13 @@ spec = describe "simplexPrune" $ do
         box = addParamValuesToBox (Map.fromList [("p", 1.0)]) baseBox
         form = x + exprVar "p" <= x + exprLit 2.0
 
-    expectNoPruning $ simplexPrune box form noExprValues
+    expectNoPruning $ simplexPrune noGiveUpAccuracy box form noExprValues
 
   it "detects constant-false conjuncts" $ do
     let form = (x <= exprLit 0.0) && (exprLit 1.0 <= exprLit 0.0)
         box = mkBox [("x", (0.0, 1.0))]
 
-    let result = simplexPrune box form noExprValues
+    let result = simplexPrune noGiveUpAccuracy box form noExprValues
 
     assertInfeasible result
 
@@ -263,7 +263,7 @@ spec = describe "simplexPrune" $ do
     let form = sin x + y <= exprLit 1.0
         box = mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))]
 
-    let result = simplexPrune box form noExprValues
+    let result = simplexPrune noGiveUpAccuracy box form noExprValues
 
     expectNoPruning result
 
@@ -273,6 +273,27 @@ spec = describe "simplexPrune" $ do
 
     expectNoPruning $ simplexPruneAfterSimplify sampleMPBall box form
 
+  it "does not tighten domains within the give-up accuracy" $ do
+    let form = x + y <= exprLit 0.5
+        box = mkBox [("x", (0.0, 10.0)), ("y", (0.0, 1.0))]
+
+    let result = simplexPrune 2.0 box form noExprValues
+
+    assertPrunedUpperBound "x" 0.5 result
+    assertPrunedUpperBound "y" 1.0 result
+
+  it "does not prune when all domains are within the give-up accuracy" $ do
+    let form = x + y <= exprLit 0.5
+        box = mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))]
+
+    expectNoPruning $ simplexPrune 2.0 box form noExprValues
+
+  it "detects infeasibility when all domains are within the give-up accuracy" $ do
+    let form = x + y <= exprLit (-1.0)
+        box = mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))]
+
+    assertInfeasible $ simplexPrune 2.0 box form noExprValues
+
 simplexPruneAfterSimplify ::
   (CanEval r, HasKleeneanComparison r, CanProvideSimplexRelaxations r) =>
   r ->
@@ -280,7 +301,7 @@ simplexPruneAfterSimplify ::
   Form ->
   Maybe LinearPruneResult
 simplexPruneAfterSimplify sampleR box form =
-  simplexPrune box simplifiedForm exprValues
+  simplexPrune noGiveUpAccuracy box simplifiedForm exprValues
   where
     (simplifiedForm, exprValues) = simplifiedFormAndValues sampleR box form
 

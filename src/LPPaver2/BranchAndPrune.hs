@@ -24,7 +24,7 @@ import Control.Monad.Logger (MonadLogger)
 import Data.Hashable (Hashable (hash))
 import Data.Map qualified as Map
 import GHC.Records
-import LPPaver2.LinearPrune (LinearPruneResult (..), linearPruneWithEvalValues)
+import LPPaver2.LinearPrune (LinearPruneResult (..), domainWithinAccuracy, linearPruneWithEvalValues)
 import LPPaver2.RealConstraints
 import LPPaver2.RealConstraints.Eval (EvaluatedFormR (..))
 import LPPaver2.SimplexPrune (CanProvideSimplexRelaxations, simplexPrune)
@@ -95,25 +95,20 @@ data LPPBPParams = LPPBPParams
 
 data LPPPruningMethod = LPPPruningMethod
   { evalArithmetic :: EvalArithmetic,
-    useSimplex :: Bool
+    useSimplex :: Bool,
+    -- | Pruning does not tighten domains whose diameter is at most this (normally the B&P give-up accuracy).
+    giveUpAccuracy :: Rational
   }
 
 shouldGiveUpOnBPLPPProblem :: Rational -> LPPProblem -> Bool
 shouldGiveUpOnBPLPPProblem giveUpAccuracy (BP.Problem {scope}) =
-  all accuracyBelowThreshold domainsOfSplitVars
+  all (domainWithinAccuracy giveUpAccuracy) domainsOfSplitVars
   where
     domainsOfSplitVars =
       [ ball
         | var <- scope.box_.splitOrder,
           Just ball <- [Map.lookup var scope.box_.varDomains]
       ]
-
-    accuracyBelowThreshold :: MPBall -> Bool
-    accuracyBelowThreshold ball =
-      -- trace (printf "Checking if box with radius %s should be given up (threshold: %s)" (show (MP.radius ball)) (show $ double giveUpAccuracy)) $
-      diameter <= giveUpAccuracy
-      where
-        diameter = 2 * MP.radius ball
 
 lppBranchAndPrune ::
   ( MonadLogger m,
@@ -168,28 +163,28 @@ instance
       pruneUncertain =
         case evaluatedForm of
           EvaluatedFormMPBall (EvaluatedFormR {exprValues}) ->
-            pruneWithEvalValues pruningMethod.useSimplex scope simplifiedFormProblem exprValues
+            pruneWithEvalValues pruningMethod scope simplifiedFormProblem exprValues
           EvaluatedFormAffine (EvaluatedFormR {exprValues}) ->
-            pruneWithEvalValues pruningMethod.useSimplex scope simplifiedFormProblem exprValues
+            pruneWithEvalValues pruningMethod scope simplifiedFormProblem exprValues
 
 pruneWithEvalValues ::
   (Applicative m, CanProvideSimplexRelaxations r) =>
-  Bool ->
+  LPPPruningMethod ->
   Box ->
   BP.Problem Form Box ->
   Map.Map ExprHash r ->
   m (BP.Paving Form Box Boxes)
-pruneWithEvalValues useSimplex scope simplifiedFormProblem exprValues = do
+pruneWithEvalValues (LPPPruningMethod {useSimplex, giveUpAccuracy}) scope simplifiedFormProblem exprValues = do
   let maybeSimplexResult =
         if useSimplex
-          then simplexPrune simplifiedFormProblem.scope simplifiedForm exprValues
+          then simplexPrune giveUpAccuracy simplifiedFormProblem.scope simplifiedForm exprValues
           else Nothing
   case maybeSimplexResult of
     Just simplexResult -> pure $ mkLinearPrunePaving scope simplifiedForm simplexResult
     Nothing ->
       -- Defensive fallback: simplex currently subsumes all relaxations supported
       -- by linear pruning, but retain this for future solver/relaxation changes.
-      case linearPruneWithEvalValues simplifiedFormProblem exprValues of
+      case linearPruneWithEvalValues giveUpAccuracy simplifiedFormProblem exprValues of
         Just linearPruneResult ->
           pure $ mkLinearPrunePaving scope simplifiedForm linearPruneResult
         _ ->

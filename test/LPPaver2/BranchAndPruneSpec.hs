@@ -9,6 +9,7 @@ import GHC.Records (HasField (getField))
 import LPPaver2.BranchAndPrune (LPPPruningMethod (..))
 import LPPaver2.PruneSpecSupport
   ( aaBoundTolerance,
+    noGiveUpAccuracy,
     sampleMPAffine,
     sampleMPBall,
     x,
@@ -117,14 +118,16 @@ mpBallMethod :: Bool -> LPPPruningMethod
 mpBallMethod useSimplex =
   LPPPruningMethod
     { evalArithmetic = EvalArithmeticMPBall {sampleBall = sampleMPBall},
-      useSimplex
+      useSimplex,
+      giveUpAccuracy = noGiveUpAccuracy
     }
 
 affineMethod :: Bool -> LPPPruningMethod
 affineMethod useSimplex =
   LPPPruningMethod
     { evalArithmetic = EvalArithmeticAffine {sampleAffine = sampleMPAffine},
-      useSimplex
+      useSimplex,
+      giveUpAccuracy = noGiveUpAccuracy
     }
 
 pruneWith :: LPPPruningMethod -> Box -> Form -> IO (BP.Paving Form Box Boxes)

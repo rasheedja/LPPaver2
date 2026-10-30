@@ -89,7 +89,8 @@ instance IsRequestResponse RunSolverRequest where
         lppBranchAndPrune
           ( LPPPruningMethod
               { evalArithmetic = getEvalArithmetic request.arithmetic,
-                useSimplex = request.useSimplex
+                useSimplex = request.useSimplex,
+                giveUpAccuracy = convert request.giveUpAccuracy
               }
           )
           (lppStepsController runId modifyState) -- accummulates steps and boxes in the server state
