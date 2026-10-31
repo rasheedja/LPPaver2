@@ -6,6 +6,7 @@ module LPPaver2.PruneSpecSupport
     y,
     sampleMPBall,
     sampleMPAffine,
+    noGiveUpAccuracy,
     exactBoundTolerance,
     aaBoundTolerance,
     simplifiedFormAndValues,
@@ -43,6 +44,10 @@ x = exprVar "x"
 
 y :: Expr
 y = exprVar "y"
+
+-- | Lets pruning tighten every volume variable, however narrow.
+noGiveUpAccuracy :: Rational
+noGiveUpAccuracy = 0.0
 
 exactBoundTolerance :: Rational
 exactBoundTolerance = 1e-20

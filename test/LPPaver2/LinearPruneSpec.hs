@@ -154,39 +154,60 @@ spec = do
       let form = (x <= exprLit 0.0) && (exprLit 1.0 <= exprLit 0.0)
           box = mkBox [("x", (0.0, 1.0))]
 
-      assertInfeasible $ linearPrune BP.Problem {scope = box, constraint = form}
+      assertInfeasible $ linearPrune noGiveUpAccuracy BP.Problem {scope = box, constraint = form}
 
     it "detects contradictory extracted bounds" $ do
       let form = (x <= exprLit 0.0) && (exprLit 1.0 <= x)
           box = mkBox [("x", (0.0, 1.0))]
 
-      assertInfeasible $ linearPrune BP.Problem {scope = box, constraint = form}
+      assertInfeasible $ linearPrune noGiveUpAccuracy BP.Problem {scope = box, constraint = form}
 
     it "detects extracted bounds outside the original box" $ do
       let form = x <= exprLit (-1.0)
           box = mkBox [("x", (0.0, 1.0))]
 
-      assertInfeasible $ linearPrune BP.Problem {scope = box, constraint = form}
+      assertInfeasible $ linearPrune noGiveUpAccuracy BP.Problem {scope = box, constraint = form}
 
     it "detects contradictory parameter bounds while tightening volume variables" $ do
       let baseBox = mkBox [("x", (0.0, 10.0))]
           box = addParamValuesToBox (Map.fromList [("p", 1.0)]) baseBox
           form = (x <= exprLit 5.0) && (exprVar "p" <= exprLit 0.0)
 
-      assertInfeasible $ linearPrune BP.Problem {scope = box, constraint = form}
+      assertInfeasible $ linearPrune noGiveUpAccuracy BP.Problem {scope = box, constraint = form}
 
     it "preserves fixed parameter domains while tightening volume variables" $ do
       let baseBox = mkBox [("x", (0.0, 10.0))]
           box = addParamValuesToBox (Map.fromList [("p", 1.0)]) baseBox
           form = x <= exprLit 5.0
 
-      case linearPrune BP.Problem {scope = box, constraint = form} of
+      case linearPrune noGiveUpAccuracy BP.Problem {scope = box, constraint = form} of
         Just LinearPruneResult {maybeRemainingBox = Just remainingBox} -> do
           let domains = remainingBox.box_.varDomains
           MP.endpoints (domains Map.! "x") `shouldSatisfy` (\(lower, upper) -> rational lower == 0 && rational upper == 5)
           MP.endpoints (domains Map.! "p") `shouldSatisfy` (\(lower, upper) -> rational lower == 1 && rational upper == 1)
           remainingBox.box_.volumeVars `shouldBe` box.box_.volumeVars
         _ -> expectationFailure "expected a tightened box"
+
+    it "does not tighten domains within the give-up accuracy" $ do
+      let form = (x <= exprLit 5.0) && (y <= exprLit 0.5)
+          box = mkBox [("x", (0.0, 10.0)), ("y", (0.0, 1.0))]
+
+      let result = linearPrune 2.0 BP.Problem {scope = box, constraint = form}
+
+      assertPrunedUpperBound "x" 5.0 result
+      assertPrunedUpperBound "y" 1.0 result
+
+    it "does not prune when all tightened domains are within the give-up accuracy" $ do
+      let form = y <= exprLit 0.5
+          box = mkBox [("x", (0.0, 10.0)), ("y", (0.0, 1.0))]
+
+      expectNoPruning $ linearPrune 2.0 BP.Problem {scope = box, constraint = form}
+
+    it "detects infeasibility when domains are within the give-up accuracy" $ do
+      let form = y <= exprLit (-1.0)
+          box = mkBox [("y", (0.0, 1.0))]
+
+      assertInfeasible $ linearPrune 2.0 BP.Problem {scope = box, constraint = form}
 
 linearPruneAfterSimplify ::
   (CanEval r, HasKleeneanComparison r, CanLineariseEval r) =>
@@ -195,6 +216,6 @@ linearPruneAfterSimplify ::
   Form ->
   Maybe LinearPruneResult
 linearPruneAfterSimplify sampleR box form =
-  linearPruneWithEvalValues BP.Problem {scope = box, constraint = simplifiedForm} exprValues
+  linearPruneWithEvalValues noGiveUpAccuracy BP.Problem {scope = box, constraint = simplifiedForm} exprValues
   where
     (simplifiedForm, exprValues) = simplifiedFormAndValues sampleR box form

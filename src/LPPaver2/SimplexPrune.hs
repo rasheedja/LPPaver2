@@ -14,6 +14,7 @@ import Data.Set qualified as Set
 import GHC.Records (HasField (getField))
 import LPPaver2.LinearPrune
   ( LinearPruneResult (..),
+    domainWithinAccuracy,
     tightenBoxByBounds,
   )
 import LPPaver2.Linearisation
@@ -253,11 +254,12 @@ boxToVarDomains varToInt box =
 -- Returns a tighter box if any improvement is found.
 simplexPrune ::
   (CanProvideSimplexRelaxations r) =>
+  Rational ->
   Box ->
   Form ->
   Map.Map ExprHash r ->
   Maybe LinearPruneResult
-simplexPrune scope simplifiedForm exprValues =
+simplexPrune giveUpAccuracy scope simplifiedForm exprValues =
   let (varToInt, intToVar) = createVarMapping (formVariables simplifiedForm) scope
       constraintExtraction = extractSimplexConstraints scope simplifiedForm.nodesE exprValues varToInt simplifiedForm
       varDomains = boxToVarDomains varToInt scope
@@ -274,7 +276,7 @@ simplexPrune scope simplifiedForm exprValues =
                   objectives =
                     P.concatMap
                       ( \(var, intVar) ->
-                          if var `Set.member` scope.box_.volumeVars P.&& intVar `Set.member` constrainedVars
+                          if isPrunable var P.&& intVar `Set.member` constrainedVars
                             then
                               [ ST.Min {objective = Map.singleton intVar (rational 1)},
                                 ST.Max {objective = Map.singleton intVar (rational 1)}
@@ -282,6 +284,10 @@ simplexPrune scope simplifiedForm exprValues =
                             else []
                       )
                       vars
+                  -- domains within the give-up accuracy are not tightened, so do not optimise them
+                  isPrunable var =
+                    var `Set.member` scope.box_.volumeVars
+                      P.&& P.not (P.maybe P.False (domainWithinAccuracy giveUpAccuracy) (Map.lookup var scope.box_.varDomains))
 
                   result = runIdentity $ runNoLoggingT $ Simplex.twoPhaseSimplex varDomains objectives constraints
                in case result.feasibleSystem of
@@ -296,7 +302,7 @@ simplexPrune scope simplifiedForm exprValues =
                       -- Extract tightened bounds from objective results
                       let objResults = result.objectiveResults
                           newBounds = extractBoundsFromResults intToVar objResults
-                          tightenedBox = tightenBoxByBounds scope (Map.toList newBounds)
+                          tightenedBox = tightenBoxByBounds giveUpAccuracy scope (Map.toList newBounds)
                        in case tightenedBox of
                             Just box -> Just LinearPruneResult {maybeRemainingBox = Just box, removedRegionTruth = False}
                             Nothing -> Nothing
