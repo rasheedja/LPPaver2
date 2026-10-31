@@ -13,10 +13,10 @@ import LPPaver2.RealConstraints.Form
 import MixedTypesNumPrelude
 import Test.Hspec
 
-simplifyEvalFormMB :: Box -> Form -> SimplifyFormResult MPBall
-simplifyEvalFormMB = simplifyEvalForm (mpBall (0 :: Integer))
+simplifyEvalFormMB :: Box -> Form -> SimplifyFormResultR MPBall
+simplifyEvalFormMB = simplifyEvalFormR (mpBall (0 :: Integer))
 
-simplifyOverUnitX :: Form -> SimplifyFormResult MPBall
+simplifyOverUnitX :: Form -> SimplifyFormResultR MPBall
 simplifyOverUnitX = simplifyEvalFormMB (mkBox [("x", (0.0, 1.0))])
 
 x :: Expr

@@ -125,29 +125,39 @@ showFormF showE showF formNode =
     FormFalse -> "False"
 
 formVariables :: Form -> Set.Set Var
-formVariables form = hashVars form.root
+formVariables form = exprVariables Set.empty Set.empty (formExpressions Set.empty [form.root])
   where
-    hashVars :: FormHash -> Set.Set Var
-    hashVars h =
-      case lookupFormNode form h of
-        FormComp {e1, e2} -> Set.union (exprVariables e1) (exprVariables e2)
-        FormUnary {f1} -> hashVars f1
-        FormBinary {f1, f2} -> Set.union (hashVars f1) (hashVars f2)
-        FormIfThenElse {fc, ft, ff} ->
-          Set.unions [hashVars fc, hashVars ft, hashVars ff]
-        FormTrue -> Set.empty
-        FormFalse -> Set.empty
+    -- Both stores encode DAGs: revisit neither shared formulas nor expressions.
+    formExpressions :: Set.Set FormHash -> [FormHash] -> [ExprHash]
+    formExpressions _ [] = []
+    formExpressions visited (h : pending)
+      | h `Set.member` visited = formExpressions visited pending
+      | otherwise =
+          case lookupFormNode form h of
+            FormComp {e1, e2} -> e1 : e2 : formExpressions visited' pending
+            FormUnary {f1} -> formExpressions visited' (f1 : pending)
+            FormBinary {f1, f2} -> formExpressions visited' (f1 : f2 : pending)
+            FormIfThenElse {fc, ft, ff} -> formExpressions visited' (fc : ft : ff : pending)
+            FormTrue -> formExpressions visited' pending
+            FormFalse -> formExpressions visited' pending
+      where
+        visited' = Set.insert h visited
 
-    exprVariables :: ExprHash -> Set.Set Var
-    exprVariables eh =
-      case Map.lookup eh form.nodesE of
-        Nothing -> error "A hash is missing from form.nodesE"
-        Just exprNode ->
-          case exprNode of
-            ExprVar var -> Set.singleton var
-            ExprLit _ -> Set.empty
-            ExprUnary {e1} -> exprVariables e1
-            ExprBinary {e1, e2} -> Set.union (exprVariables e1) (exprVariables e2)
+    exprVariables :: Set.Set ExprHash -> Set.Set Var -> [ExprHash] -> Set.Set Var
+    exprVariables _ vars [] = vars
+    exprVariables visited vars (eh : pending)
+      | eh `Set.member` visited = exprVariables visited vars pending
+      | otherwise =
+          case Map.lookup eh form.nodesE of
+            Nothing -> error "A hash is missing from form.nodesE"
+            Just exprNode ->
+              case exprNode of
+                ExprVar var -> exprVariables visited' (Set.insert var vars) pending
+                ExprLit _ -> exprVariables visited' vars pending
+                ExprUnary {e1} -> exprVariables visited' vars (e1 : pending)
+                ExprBinary {e1, e2} -> exprVariables visited' vars (e1 : e2 : pending)
+      where
+        visited' = Set.insert eh visited
 
 form0 :: FormNode -> Form
 form0 f =

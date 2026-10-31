@@ -59,6 +59,11 @@ ghc-options:
 
 library:
   source-dirs: src
+  dependencies:
+  - simplex-method
+  other-modules:
+  - LPPaver2.Linearisation
+  - LPPaver2.RealConstraints.IntervalAD
 
 executables:
   # lppaver2-example:
@@ -93,3 +98,4 @@ tests:
     dependencies:
     - LPPaver2
     - hspec
+    - QuickCheck
