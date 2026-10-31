@@ -173,17 +173,17 @@ instance
             pruneWithEvalValues pruningMethod.useSimplex scope simplifiedFormProblem exprValues
 
 pruneWithEvalValues ::
-  (MonadIO m, CanProvideSimplexRelaxations r) =>
+  (Applicative m, CanProvideSimplexRelaxations r) =>
   Bool ->
   Box ->
   BP.Problem Form Box ->
   Map.Map ExprHash r ->
   m (BP.Paving Form Box Boxes)
 pruneWithEvalValues useSimplex scope simplifiedFormProblem exprValues = do
-  maybeSimplexResult <-
-    if useSimplex
-      then simplexPrune simplifiedFormProblem.scope simplifiedForm exprValues
-      else pure Nothing
+  let maybeSimplexResult =
+        if useSimplex
+          then simplexPrune simplifiedFormProblem.scope simplifiedForm exprValues
+          else Nothing
   case maybeSimplexResult of
     Just simplexResult -> pure $ mkLinearPrunePaving scope simplifiedForm simplexResult
     Nothing ->

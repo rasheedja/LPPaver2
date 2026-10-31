@@ -17,7 +17,7 @@ import LPPaver2.RealConstraints.Form (Form)
 import LPPaver2.SimplexPrune (CanProvideSimplexRelaxations, simplexPrune)
 import MixedTypesNumPrelude
 import Test.Hspec
-import Test.QuickCheck (Property, chooseInteger, conjoin, counterexample, forAll, ioProperty, property)
+import Test.QuickCheck (Property, chooseInteger, conjoin, counterexample, forAll, property)
 import Prelude qualified as P
 
 spec :: Spec
@@ -26,13 +26,13 @@ spec = describe "simplexPrune" $ do
     let form = 3.0 * x - y <= exprLit 0.0
         box = mkBox [("x", (-1.0, 10.0)), ("y", (0.0, 6.0))]
 
-    assertPrunedUpperBound "x" 2.0 =<< simplexPrune box form noExprValues
+    assertPrunedUpperBound "x" 2.0 $ simplexPrune box form noExprValues
 
   it "decomposes division by a positive literal exactly" $ do
     let form = x / exprLit 2.0 + y <= exprLit 1.0
         box = mkBox [("x", (0.0, 4.0)), ("y", (0.0, 4.0))]
 
-    result <- simplexPrune box form noExprValues
+    let result = simplexPrune box form noExprValues
 
     assertPrunedUpperBound "x" 2.0 result
     assertPrunedUpperBound "y" 1.0 result
@@ -41,7 +41,7 @@ spec = describe "simplexPrune" $ do
     let form = x / exprLit (-2.0) + y <= exprLit (-1.0)
         box = mkBox [("x", (0.0, 4.0)), ("y", (0.0, 4.0))]
 
-    result <- simplexPrune box form noExprValues
+    let result = simplexPrune box form noExprValues
 
     assertPrunedLowerBound "x" 2.0 result
 
@@ -49,7 +49,7 @@ spec = describe "simplexPrune" $ do
     let form = x + y <= exprLit 5.0
         box = mkBox [("x", (0.0, 0.0)), ("y", (0.0, 10.0))]
 
-    result <- simplexPrune box form noExprValues
+    let result = simplexPrune box form noExprValues
 
     assertPrunedUpperBound "y" 5.0 result
 
@@ -57,7 +57,7 @@ spec = describe "simplexPrune" $ do
     let form = y <= exprLit 5.0
         box = mkBox [("x", (0.0, 0.0)), ("y", (0.0, 10.0))]
 
-    result <- simplexPrune box form noExprValues
+    let result = simplexPrune box form noExprValues
 
     assertPrunedUpperBound "y" 5.0 result
 
@@ -65,7 +65,7 @@ spec = describe "simplexPrune" $ do
     let form = x + y <= exprLit 5.0 + y
         box = mkBox [("x", (0.0, 10.0)), ("y", (-2.0, 3.0))]
 
-    result <- simplexPrune box form noExprValues
+    let result = simplexPrune box form noExprValues
 
     assertPrunedUpperBound "x" 5.0 result
     assertPrunedLowerBound "y" (-2.0) result
@@ -81,7 +81,7 @@ spec = describe "simplexPrune" $ do
         box = addParamValuesToBox (Map.fromList [("p", 1.0)]) baseBox
         form = x + exprVar "p" <= exprLit 5.0
 
-    result <- simplexPrune box form noExprValues
+    let result = simplexPrune box form noExprValues
 
     assertPrunedUpperBound "x" 4.0 result
     case result of
@@ -98,7 +98,7 @@ spec = describe "simplexPrune" $ do
         form = sharedExpression <= exprLit coefficient
         box = mkBox [("x", (0.0, 2.0))]
 
-    result <- simplexPrune box form noExprValues
+    let result = simplexPrune box form noExprValues
 
     assertPrunedUpperBound "x" 1.0 result
 
@@ -106,8 +106,8 @@ spec = describe "simplexPrune" $ do
     let form = x * x <= exprLit 2.0
         box = mkBox [("x", (1.0, 2.0))]
 
-    iaResult <- simplexPruneAfterSimplify sampleMPBall box form
-    aaResult <- simplexPruneAfterSimplify sampleMPAffine box form
+    let iaResult = simplexPruneAfterSimplify sampleMPBall box form
+    let aaResult = simplexPruneAfterSimplify sampleMPAffine box form
 
     assertPrunedUpperBoundWithin aaBoundTolerance "x" 1.5 iaResult
     assertPrunedUpperBoundWithin aaBoundTolerance "x" 1.5 aaResult
@@ -121,7 +121,7 @@ spec = describe "simplexPrune" $ do
 
     P.mapM_
       (\box -> do
-         result <- simplexPruneAfterSimplify sampleMPAffine box form
+         let result = simplexPruneAfterSimplify sampleMPAffine box form
          assertPrunedUpperBoundWithin aaBoundTolerance "x" 0.25 result
          assertPrunedUpperBoundWithin aaBoundTolerance "y" 0.5 result
       )
@@ -131,8 +131,8 @@ spec = describe "simplexPrune" $ do
     let form = sin (x - x) + y <= exprLit 0.5
         box = mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))]
 
-    iaResult <- simplexPruneAfterSimplify sampleMPBall box form
-    aaResult <- simplexPruneAfterSimplify sampleMPAffine box form
+    let iaResult = simplexPruneAfterSimplify sampleMPBall box form
+    let aaResult = simplexPruneAfterSimplify sampleMPAffine box form
 
     assertPrunedLowerBound "x" 0.0 iaResult
     assertPrunedUpperBound "x" 1.0 iaResult
@@ -147,7 +147,7 @@ spec = describe "simplexPrune" $ do
     let form = exprLit 2.0 <= x * x
         box = mkBox [("x", (1.0, 2.0))]
 
-    result <- simplexPruneAfterSimplify sampleMPBall box form
+    let result = simplexPruneAfterSimplify sampleMPBall box form
 
     assertPrunedLowerBoundWithin aaBoundTolerance "x" 1.25 result
 
@@ -156,7 +156,7 @@ spec = describe "simplexPrune" $ do
         box = mkBox [("x", (0.0, 1.0))]
         expectedUpper = 0.6585290151921035
 
-    result <- simplexPruneAfterSimplify sampleMPBall box form
+    let result = simplexPruneAfterSimplify sampleMPBall box form
 
     assertPrunedUpperBoundWithin aaBoundTolerance "x" expectedUpper result
 
@@ -164,7 +164,7 @@ spec = describe "simplexPrune" $ do
     let form = cos x <= exprLit 0.5
         box = mkBox [("x", (0.0, 2.0))]
 
-    result <- simplexPruneAfterSimplify sampleMPBall box form
+    let result = simplexPruneAfterSimplify sampleMPBall box form
 
     assertPrunedLowerBoundWithin aaBoundTolerance "x" 0.5 result
 
@@ -172,7 +172,7 @@ spec = describe "simplexPrune" $ do
     let form = x * y <= exprLit 1.0
         box = mkBox [("x", (1.0, 2.0)), ("y", (1.0, 2.0))]
 
-    result <- simplexPruneAfterSimplify sampleMPBall box form
+    let result = simplexPruneAfterSimplify sampleMPBall box form
 
     assertPrunedUpperBoundWithin aaBoundTolerance "x" 1.0 result
     assertPrunedUpperBoundWithin aaBoundTolerance "y" 1.0 result
@@ -181,7 +181,7 @@ spec = describe "simplexPrune" $ do
     let form = sqrt x <= exprLit 1.0
         box = mkBox [("x", (0.25, 4.0))]
 
-    result <- simplexPruneAfterSimplify sampleMPBall box form
+    let result = simplexPruneAfterSimplify sampleMPBall box form
 
     assertPrunedUpperBoundWithin aaBoundTolerance "x" 2.25 result
 
@@ -189,7 +189,7 @@ spec = describe "simplexPrune" $ do
     let form = exprLit 1.0 / x <= exprLit 0.5
         box = mkBox [("x", (1.0, 4.0))]
 
-    result <- simplexPruneAfterSimplify sampleMPBall box form
+    let result = simplexPruneAfterSimplify sampleMPBall box form
 
     assertPrunedLowerBoundWithin aaBoundTolerance "x" 1.5 result
 
@@ -197,7 +197,7 @@ spec = describe "simplexPrune" $ do
     let form = exprLit (-0.5) <= exprLit 1.0 / x
         box = mkBox [("x", (-4.0, -1.0))]
 
-    result <- simplexPruneAfterSimplify sampleMPBall box form
+    let result = simplexPruneAfterSimplify sampleMPBall box form
 
     assertPrunedUpperBoundWithin aaBoundTolerance "x" (-1.5) result
 
@@ -205,19 +205,19 @@ spec = describe "simplexPrune" $ do
     let form = exprLit 1.0 / x <= exprLit 0.5
         box = mkBox [("x", (-1.0, 4.0))]
 
-    expectNoPruning =<< simplexPrune box form noExprValues
+    expectNoPruning $ simplexPrune box form noExprValues
 
   it "skips square-root linearisation when its derivative is unbounded at zero" $ do
     let form = sqrt x <= exprLit 1.0
         box = mkBox [("x", (0.0, 4.0))]
 
-    expectNoPruning =<< simplexPrune box form noExprValues
+    expectNoPruning $ simplexPrune box form noExprValues
 
   it "retains feasible points when trigonometric derivatives change sign" $ do
     let form = sin x <= exprLit 0.0
         box = mkBox [("x", (0.0, 8.0))]
 
-    result <- simplexPruneAfterSimplify sampleMPBall box form
+    let result = simplexPruneAfterSimplify sampleMPBall box form
 
     assertPointRetained [("x", 6.0)] result
 
@@ -231,7 +231,7 @@ spec = describe "simplexPrune" $ do
     let form = (x <= exprLit 0.0) && (exprLit 1.0 <= x)
         box = mkBox [("x", (0.0, 1.0))]
 
-    result <- simplexPrune box form noExprValues
+    let result = simplexPrune box form noExprValues
 
     assertInfeasible result
 
@@ -240,7 +240,7 @@ spec = describe "simplexPrune" $ do
         box = addParamValuesToBox (Map.fromList [("p", 1.0)]) baseBox
         form = x + exprVar "p" <= x
 
-    result <- simplexPrune box form noExprValues
+    let result = simplexPrune box form noExprValues
 
     assertInfeasible result
 
@@ -249,13 +249,13 @@ spec = describe "simplexPrune" $ do
         box = addParamValuesToBox (Map.fromList [("p", 1.0)]) baseBox
         form = x + exprVar "p" <= x + exprLit 2.0
 
-    expectNoPruning =<< simplexPrune box form noExprValues
+    expectNoPruning $ simplexPrune box form noExprValues
 
   it "detects constant-false conjuncts" $ do
     let form = (x <= exprLit 0.0) && (exprLit 1.0 <= exprLit 0.0)
         box = mkBox [("x", (0.0, 1.0))]
 
-    result <- simplexPrune box form noExprValues
+    let result = simplexPrune box form noExprValues
 
     assertInfeasible result
 
@@ -263,7 +263,7 @@ spec = describe "simplexPrune" $ do
     let form = sin x + y <= exprLit 1.0
         box = mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))]
 
-    result <- simplexPrune box form noExprValues
+    let result = simplexPrune box form noExprValues
 
     expectNoPruning result
 
@@ -271,14 +271,14 @@ spec = describe "simplexPrune" $ do
     let form = sin x + y <= exprLit 1.0
         box = mkBox [("x", (0.0, 1.0)), ("y", (0.0, 1.0))]
 
-    expectNoPruning =<< simplexPruneAfterSimplify sampleMPBall box form
+    expectNoPruning $ simplexPruneAfterSimplify sampleMPBall box form
 
 simplexPruneAfterSimplify ::
   (CanEval r, HasKleeneanComparison r, CanProvideSimplexRelaxations r) =>
   r ->
   Box ->
   Form ->
-  IO (Maybe LinearPruneResult)
+  Maybe LinearPruneResult
 simplexPruneAfterSimplify sampleR box form =
   simplexPrune box simplifiedForm exprValues
   where
@@ -299,23 +299,18 @@ generatedFeasiblePointsAreRetained =
           productBox = mkBox [("x", (0.0, 5.0)), ("y", (0.0, 5.0))]
           reciprocalBox = mkBox [("x", (0.5, 5.0))]
           sqrtBox = mkBox [("x", (0.0, 16.0))]
-       in ioProperty $ do
-            upperSquare <-
-              retentionProperty "x*x <= p^2" [("x", p)] positiveBox
-                $ x * x <= exprLit pSquared
-            lowerSquare <-
+       in conjoin
+            [ retentionProperty "x*x <= p^2" [("x", p)] positiveBox
+                $ x * x <= exprLit pSquared,
               retentionProperty "p^2 <= x*x" [("x", p)] positiveBox
-                $ exprLit pSquared <= x * x
-            productCase <-
+                $ exprLit pSquared <= x * x,
               retentionProperty "x*y <= p*q" [("x", p), ("y", q)] productBox
-                $ x * y <= exprLit (p P.* q)
-            reciprocalCase <-
+                $ x * y <= exprLit (p P.* q),
               retentionProperty "1/x <= 1/p" [("x", p)] reciprocalBox
-                $ exprLit (rational 1) / x <= exprLit (P.recip p)
-            sqrtCase <-
+                $ exprLit (rational 1) / x <= exprLit (P.recip p),
               retentionProperty "sqrt x <= q" [("x", qSquared)] sqrtBox
                 $ sqrt x <= exprLit q
-            pure $ conjoin [upperSquare, lowerSquare, productCase, reciprocalCase, sqrtCase]
+            ]
 
 generatedSqrtBoundaryPointsAreRetained :: Property
 generatedSqrtBoundaryPointsAreRetained =
@@ -324,25 +319,23 @@ generatedSqrtBoundaryPointsAreRetained =
         qSquared = q P.* q
         box = mkBox [("x", (1.0, 4.0))]
         form = sqrt x <= exprLit q
-     in ioProperty $ do
-          result <- simplexPruneAfterSimplify sampleMPBall box form
-          pure $
-            conjoin
-              [ counterexample "sqrt x <= q pruned its feasible boundary x = q^2" $
-                  pointIsRetained [("x", qSquared)] result,
-                counterexample "expected square-root pruning to tighten the upper bound below 4" $
-                  case result of
-                    Just LinearPruneResult {maybeRemainingBox = Just remainingBox} ->
-                      case Map.lookup "x" remainingBox.box_.varDomains of
-                        Just domain -> rational (P.snd (MP.endpoints domain)) P.< rational 4
-                        Nothing -> False
-                    _ -> False
-              ]
+        result = simplexPruneAfterSimplify sampleMPBall box form
+     in conjoin
+          [ counterexample "sqrt x <= q pruned its feasible boundary x = q^2" $
+              pointIsRetained [("x", qSquared)] result,
+            counterexample "expected square-root pruning to tighten the upper bound below 4" $
+              case result of
+                Just LinearPruneResult {maybeRemainingBox = Just remainingBox} ->
+                  case Map.lookup "x" remainingBox.box_.varDomains of
+                    Just domain -> rational (P.snd (MP.endpoints domain)) P.< rational 4
+                    Nothing -> False
+                _ -> False
+          ]
 
-retentionProperty :: String -> [(String, Rational)] -> Box -> Form -> IO Property
-retentionProperty label point box form = do
-  result <- simplexPruneAfterSimplify sampleMPBall box form
-  pure $ counterexample (label P.++ " pruned a feasible point") (pointIsRetained point result)
+retentionProperty :: String -> [(String, Rational)] -> Box -> Form -> Property
+retentionProperty label point box form =
+  let result = simplexPruneAfterSimplify sampleMPBall box form
+   in counterexample (label P.++ " pruned a feasible point") (pointIsRetained point result)
 
 assertPointRetained :: [(String, Rational)] -> Maybe LinearPruneResult -> Expectation
 assertPointRetained point result =
